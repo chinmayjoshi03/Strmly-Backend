@@ -15,8 +15,11 @@ const LikeVideo = async (req, res, next) => {
   }
 
   try {
-    const VideoModel = videoType === "long" ? LongVideo : ShortVideo;
-    const video = await VideoModel.findById(videoId);
+    let video = await ShortVideo.findById(videoId);
+
+    if (!video) {
+      video = await LongVideo.findById(videoId);
+    }
 
     if (!video) {
       return res.status(404).json({ message: "Video not found" });
