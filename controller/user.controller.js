@@ -62,6 +62,7 @@ const GetUserProfile = async (req, res, next) => {
     res.status(200).json({
       message: 'User profile retrieved successfully',
       user,
+      onboarding_completed: user.onboarding_completed
     })
   } catch (error) {
     handleError(error, req, res, next)
@@ -98,9 +99,16 @@ const UpdateUserProfile = async (req, res, next) => {
       return res.status(404).json({ message: 'User not found' })
     }
 
+    // Update the user's onboarding status
+    if (!updatedUser.onboarding_completed && updatedUser.interests.length > 0) {
+      updatedUser.onboarding_completed = true
+      await updatedUser.save()
+    }
+
     res.status(200).json({
       message: 'Profile updated successfully',
       user: updatedUser,
+      onboarding_completed: updatedUser.onboarding_completed,
     })
   } catch (error) {
     handleError(error, req, res, next)
@@ -290,6 +298,8 @@ const GetUserInteractions = async (req, res, next) => {
       interactions.comments = userComments
     }
 
+    // get total
+
     res.status(200).json({
       message: 'User interactions retrieved successfully',
       interactions,
@@ -307,6 +317,10 @@ const GetUserEarnings = async (req, res, next) => {
       'name views likes shares'
     )
 
+    const shortVideos = await ShortVideo.find({ created_by: userId }).select(
+      'name views likes shares'
+    )
+    userVideos.push(...shortVideos)
     const totalViews = userVideos.reduce((sum, video) => sum + video.views, 0)
     const totalLikes = userVideos.reduce((sum, video) => sum + video.likes, 0)
     const totalShares = userVideos.reduce((sum, video) => sum + video.shares, 0)
@@ -389,6 +403,8 @@ const GetUserNotifications = async (req, res, next) => {
     handleError(error, req, res, next)
   }
 }
+
+
 
 const UpdateUserInterests = async (req, res, next) => {
   try {
@@ -477,6 +493,9 @@ const getUserProfileDetails = async (req, res, next) => {
         totalFollowers,
         totalFollowing,
         totalCommunities,
+        onboarding_completed: userDetails.onboarding_completed,
+        tags: userDetails.interests || [],
+        creator_pass_price: userDetails.creator_profile?.creator_pass_price || 0
       }
     });
   } catch (error) {
