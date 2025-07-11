@@ -439,13 +439,24 @@ const UpdateUserInterests = async (req, res, next) => {
 const GetUserFollowers = async (req, res, next) => {
   try {
     const userId = req.params.id || req.user._id
-    const user = await User.findById(userId).populate('followers', 'username profile_photo')
+    const user = await User.findById(userId).populate(
+      'followers',
+      'username profile_photo followers'
+    )
     if (!user) {
       return res.status(404).json({ message: 'User not found' })
     }
+    const enrichedUserFollowers = user.followers.map((follower) => ({
+      _id: follower._id,
+      username: follower.username,
+      profile_photo: follower.profile_photo,
+      total_followers: follower.followers?.length || 0,
+      is_following: follower.followers?.includes(userId) || false, //determines whether the user also follows the follower or not (mutual following)
+    }))
+
     res.status(200).json({
       message: 'User followers retrieved successfully',
-      followers: user.followers,
+      followers: enrichedUserFollowers,
       count: user.followers.length,
     })
   } catch (error) {
@@ -663,13 +674,12 @@ const HasCreatorPass = async (req, res, next) => {
 
 const followUser = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.id.toString(); //convert to string to prevent type mismatch bugs
     const { followUserId } = req.body;
 
     if (!followUserId) {
       return res.status(400).json({ message: 'Follow user ID is required' });
     }
-
     if (userId === followUserId) {
       return res.status(400).json({ message: 'You cannot follow yourself' });
     }
@@ -719,7 +729,7 @@ const followUser = async (req, res, next) => {
 
 const unfollowUser=async(req,res,next)=>{
   try {
-    const userId = req.user.id;
+    const userId = req.user.id.toString(); //convert to string to prevent type mismatch bugs
     const { unfollowUserId } = req.body;
     if (!unfollowUserId) {
       return res.status(400).json({ message: 'Unfollow user ID is required' });
