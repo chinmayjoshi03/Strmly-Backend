@@ -6,12 +6,24 @@ const {
   LogoutUser,
   RefreshToken,
   LoginUserWithGoogle,
-  RegisterUserWithGoogle
+  RegisterUserWithGoogle,
+  verifyEmail,
+  resendVerificationEmail,
+  forgotPassword,
+  verifyResetToken,
+  resetPassword
 } = require('../controller/auth.controller')
 const { authenticateToken,parseGoogleOAuthToken} = require('../middleware/auth')
 
 // Register a new user
 router.post('/register', RegisterNewUser)
+
+// Verify email
+router.post('/verify-email', verifyEmail)
+
+// Resend verification email
+router.post('/resend-verification', resendVerificationEmail)
+
 
 // Login an existing user using email
 router.post('/login/email', LoginUserWithEmail)
@@ -30,5 +42,10 @@ router.post('/logout', LogoutUser)
 
 // Refresh JWT token (protected route)
 router.post('/refresh', authenticateToken, RefreshToken)
+
+//password reset routes
+router.post('/forgot-password', forgotPassword)
+router.post('/verify-reset-token', verifyResetToken)
+router.post('/reset-password', resetPassword)
 
 module.exports = router

@@ -1,4 +1,5 @@
 const User = require('../models/User')
+const { generateVerificationToken, sendVerificationEmail, sendWelcomeEmail, generatePasswordResetToken, sendPasswordResetEmail, sendPasswordResetConfirmationEmail } = require('../utils/email')
 const { generateToken } = require('../utils/jwt')
 const { handleError } = require('../utils/utils')
 
@@ -22,24 +23,140 @@ const RegisterNewUser = async (req, res, next) => {
       username = username.username + Math.floor(Math.random() * 100000)
     }
 
+    //generate a verification token
+    const verificationToken = generateVerificationToken();
+    const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+
     const newUser = new User({
       username,
       email,
       password,
-    })
+      email_verification:{
+        is_verified:false,
+        verification_token: verificationToken,
+        verification_token_expires: verificationTokenExpires,
+        verification_sent_at: new Date(),
+      }
+    });
 
     await newUser.save()
 
+    const emailResult=await sendVerificationEmail(email,username,verificationToken);
+    if(!emailResult.success){
+      return res.status(500).json({ message: 'Failed to send verification email' })
+    }
     const token = generateToken(newUser._id)
 
     res.status(201).json({
-      message: 'User registered successfully',
+      message: 'User registered successfully.Please check your email to verify your account',
       token,
       user: {
         id: newUser._id,
         username: newUser.username,
         email: newUser.email,
+        email_verified: false,
       },
+     verification: {
+        email_sent: emailResult.success,
+        message: emailResult.success 
+          ? 'Verification email sent successfully' 
+          : 'Registration completed but verification email failed to send',
+      },
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const verifyEmail=async(req,res,next)=>{
+  const { token } = req.body;
+  if (!token) {
+    return res.status(400).json({ message: 'Verification token is required' })
+  }
+  try {
+    const user=await User.findOne({
+      'email_verification.verification_token': token,
+      'email_verification.verification_token_expires': { $gt: new Date() },
+    })
+    if(!user) {
+      return res.status(400).json({ message: 'Invalid or expired verification token' })
+    }
+
+    if(user.email_verification.is_verified){
+      return res.status(400).json({ message: 'Email is already verified' })
+    } 
+    user.email_verification.is_verified = true;
+    user.email_verification.verification_token = null;
+    user.email_verification.verification_token_expires = null;
+    await user.save();
+
+    await sendWelcomeEmail(user.email, user.username);
+   res.status(200).json({
+      message: 'Email verified successfully! You can now sign in.',
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        email_verified: true,
+      },
+      redirect: '/login',
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const resendVerificationEmail = async (req, res, next) => {
+  try {
+    const { email } = req.body
+
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' })
+    }
+
+    const user = await User.findOne({ email })
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+
+    if (user.email_verification.is_verified) {
+      return res.status(400).json({ 
+        message: 'Email is already verified',
+        code: 'ALREADY_VERIFIED'
+      })
+    }
+
+    // Check if we can resend (rate limiting)
+    const lastSent = user.email_verification.verification_sent_at
+    if (lastSent && new Date() - lastSent < 60000) { // 1 minute cooldown
+      return res.status(429).json({ 
+        message: 'Please wait before requesting another verification email',
+        code: 'RATE_LIMITED'
+      })
+    }
+
+    // Generate new token
+    const verificationToken = generateVerificationToken()
+    const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000)
+
+    user.email_verification.verification_token = verificationToken
+    user.email_verification.verification_token_expires = verificationExpires
+    user.email_verification.verification_sent_at = new Date()
+    await user.save()
+
+    // Send verification email
+    const emailResult = await sendVerificationEmail(user.email, user.username, verificationToken)
+
+    if (!emailResult.success) {
+      return res.status(500).json({ 
+        message: 'Failed to send verification email',
+        code: 'EMAIL_SEND_FAILED'
+      })
+    }
+
+    res.status(200).json({
+      message: 'Verification email sent successfully',
+      email_sent: true,
     })
   } catch (error) {
     handleError(error, req, res, next)
@@ -57,6 +174,14 @@ const LoginUserWithEmail = async (req, res, next) => {
     const user = await User.findOne({ email }).select('+password')
     if (!user) {
       return res.status(400).json({ message: 'Invalid email or password' })
+    }
+    if (!user.email_verification.is_verified) {
+      return res.status(403).json({ 
+        message: 'Please verify your email before signing in',
+        code: 'EMAIL_NOT_VERIFIED',
+        email: user.email,
+        can_resend: true,
+      })
     }
 
     const isMatch = await user.comparePassword(password)
@@ -93,6 +218,14 @@ const LoginUserWithUsername = async (req, res, next) => {
     const user = await User.findOne({ username }).select('+password')
     if (!user) {
       return res.status(400).json({ message: 'Invalid username or password' })
+    }
+    if (!user.email_verification.is_verified) {
+      return res.status(403).json({ 
+        message: 'Please verify your email before signing in',
+        code: 'EMAIL_NOT_VERIFIED',
+        email: user.email,
+        can_resend: true,
+      })
     }
 
     const isMatch = await user.comparePassword(password)
@@ -225,6 +358,160 @@ const RefreshToken = async (req, res, next) => {
   }
 }
 
+const forgotPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body
+
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' })
+    }
+
+    const user = await User.findOne({ email })
+    if (!user) {
+      // Don't reveal if email exists or not for security
+      return res.status(200).json({ 
+        message: 'If an account with that email exists, we have sent a password reset link.',
+        email_sent: true
+      })
+    }
+
+    // Check if we can send reset email (rate limiting)
+    const lastReset = user.password_reset.reset_requested_at
+    if (lastReset && new Date() - lastReset < 300000) { // 5 minutes cooldown
+      return res.status(429).json({ 
+        message: 'Please wait before requesting another password reset email',
+        code: 'RATE_LIMITED'
+      })
+    }
+
+    // Generate reset token
+    const resetToken = generatePasswordResetToken()
+    const resetExpires = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+
+    user.password_reset.reset_token = resetToken
+    user.password_reset.reset_token_expires = resetExpires
+    user.password_reset.reset_requested_at = new Date()
+    await user.save()
+
+    // Send reset email
+    const emailResult = await sendPasswordResetEmail(user.email, user.username, resetToken)
+
+    if (!emailResult.success) {
+      // Reset the token if email fails
+      user.password_reset.reset_token = null
+      user.password_reset.reset_token_expires = null
+      await user.save()
+      
+      return res.status(500).json({ 
+        message: 'Failed to send password reset email',
+        code: 'EMAIL_SEND_FAILED'
+      })
+    }
+
+    res.status(200).json({
+      message: 'Password reset email sent successfully',
+      email_sent: true,
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const verifyResetToken = async (req, res, next) => {
+  try {
+    const { token } = req.body
+
+    if (!token) {
+      return res.status(400).json({ 
+        message: 'Reset token is required',
+        code: 'TOKEN_REQUIRED'
+      })
+    }
+
+    const user = await User.findOne({
+      'password_reset.reset_token': token,
+      'password_reset.reset_token_expires': { $gt: new Date() },
+    })
+
+    if (!user) {
+      return res.status(400).json({ 
+        message: 'Invalid or expired reset token',
+        code: 'INVALID_TOKEN'
+      })
+    }
+
+    res.status(200).json({
+      message: 'Reset token is valid',
+      valid: true,
+      email: user.email 
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const resetPassword = async (req, res, next) => {
+  try {
+    const { token, newPassword, confirmPassword } = req.body
+
+    if (!token || !newPassword || !confirmPassword) {
+      return res.status(400).json({ 
+        message: 'Token, new password, and password confirmation are required' 
+      })
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ 
+        message: 'Passwords do not match' 
+      })
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        message: 'Password must be at least 6 characters long' 
+      })
+    }
+
+    const user = await User.findOne({
+      'password_reset.reset_token': token,
+      'password_reset.reset_token_expires': { $gt: new Date() },
+    }).select('+password')
+
+    if (!user) {
+      return res.status(400).json({ 
+        message: 'Invalid or expired reset token',
+        code: 'INVALID_TOKEN'
+      })
+    }
+
+    // Check if new password is different from current password
+    const isSamePassword = await user.comparePassword(newPassword)
+    if (isSamePassword) {
+      return res.status(400).json({ 
+        message: 'New password must be different from your current password' 
+      })
+    }
+
+    // Update password and clear reset token
+    user.password = newPassword
+    user.password_reset.reset_token = null
+    user.password_reset.reset_token_expires = null
+    user.password_reset.reset_requested_at = null
+    await user.save()
+
+    // Send confirmation email
+    await sendPasswordResetConfirmationEmail(user.email, user.username)
+
+    res.status(200).json({
+      message: 'Password reset successfully. You can now sign in with your new password.',
+      success: true,
+      redirect: '/login'
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
 module.exports = {
   RegisterNewUser,
   LoginUserWithEmail,
@@ -232,5 +519,11 @@ module.exports = {
   LogoutUser,
   RefreshToken,
   RegisterUserWithGoogle,
-  LoginUserWithGoogle
+  LoginUserWithGoogle,
+  verifyEmail,
+  resendVerificationEmail,
+  forgotPassword,
+  verifyResetToken,
+  resetPassword,
+
 }
