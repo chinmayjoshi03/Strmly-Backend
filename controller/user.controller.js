@@ -1,6 +1,7 @@
 const User = require('../models/User')
 const Community = require('../models/Community')
 const LongVideo = require('../models/LongVideo')
+const Comment = require('../models/Comment')
 const { handleError, uploadImageToS3 } = require('../utils/utils')
 const UserAccess = require('../models/UserAccess')
 const Reshare = require('../models/Reshare')
@@ -1407,7 +1408,7 @@ const updateSocialMediaLinks = async (req, res, next) => {
 
 const getUserDashboardAnalytics = async (req, res, next) => {
   const userId = req.user._id.toString()
-  const group = req.body.group
+  const group = req.query.group
   const response = {}
 
   try {
