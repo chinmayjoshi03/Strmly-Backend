@@ -6,6 +6,8 @@ const { handleError, uploadImageToS3 } = require('../utils/utils')
 const UserAccess = require('../models/UserAccess')
 const Reshare = require('../models/Reshare')
 const { getRedisClient } = require('../config/redis')
+const CreatorPass = require('../models/CreatorPass')
+const Series = require('../models/Series')
 const GetUserFeed = async (req, res, next) => {
   try {
     const userId = req.user._id
@@ -488,6 +490,7 @@ const GetUserNotifications = async (req, res, next) => {
         videoId: video._id,
         avatar: comment.user.profile_photo,
         timeStamp: comment.createdAt,
+        is_monetized: comment.is_monetized,
         read: false,
         URL: `/api/v1/videos/${video._id}`,
       }))
@@ -1413,13 +1416,9 @@ const getUserDashboardAnalytics = async (req, res, next) => {
 
   try {
     //both created and joined communities
-    if (
-      group === undefined ||
-      group.length === 0 ||
-      group.includes('communities')
-    ) {
+    if (!group || group.includes('communities')) {
       const userComunities = {}
-      createdCommunities = await Community.find({ founder: userId })
+      const createdCommunities = await Community.find({ founder: userId })
         .populate('followers', 'username profile_photo')
         .populate('creators', 'username profile_photo')
 
@@ -1436,11 +1435,11 @@ const getUserDashboardAnalytics = async (req, res, next) => {
       response.communities = userComunities
     }
     //videos created by the user
-    if (group === undefined || group.length === 0 || group.includes('videos')) {
+    if (!group || group.includes('videos')) {
       const page = 1,
         limit = 10
       const skip = (page - 1) * limit
-      videos = await LongVideo.find({ created_by: userId })
+      const videos = await LongVideo.find({ created_by: userId })
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo')
         .sort({ createdAt: -1 })
@@ -1460,11 +1459,7 @@ const getUserDashboardAnalytics = async (req, res, next) => {
       response.videos = result
     }
     //user followers
-    if (
-      group === undefined ||
-      group.length === 0 ||
-      group.includes('followers')
-    ) {
+    if (!group || group.includes('followers')) {
       const user = await User.findById(userId).populate(
         'followers',
         'username profile_photo followers'
@@ -1482,11 +1477,7 @@ const getUserDashboardAnalytics = async (req, res, next) => {
       }
     }
     //user following
-    if (
-      group === undefined ||
-      group.length === 0 ||
-      group.includes('following')
-    ) {
+    if (!group || group.includes('following')) {
       const user = await User.findById(userId).populate(
         'following',
         'username profile_photo'
@@ -1499,11 +1490,7 @@ const getUserDashboardAnalytics = async (req, res, next) => {
     }
 
     //video likes, comment upvotes, video reshares, comments and replies
-    if (
-      group === undefined ||
-      group.length === 0 ||
-      group.includes('interactions')
-    ) {
+    if (!group || group.includes('interactions')) {
       const interactions = {}
       //video likes
       const user = await User.findById(userId).populate({
@@ -1568,11 +1555,7 @@ const getUserDashboardAnalytics = async (req, res, next) => {
       response.interactions = interactions
     }
     //user earnings
-    if (
-      group === undefined ||
-      group.length === 0 ||
-      group.includes('earnings')
-    ) {
+    if (!group || group.includes('earnings')) {
       const userVideos = await LongVideo.find({ creator: userId }).select(
         'name views likes shares'
       )
@@ -1600,11 +1583,7 @@ const getUserDashboardAnalytics = async (req, res, next) => {
       response.earnings = earnings
     }
     //user history
-    if (
-      group === undefined ||
-      group.length === 0 ||
-      group.includes('history')
-    ) {
+    if (!group || group.includes('history')) {
       const page = 1,
         limit = 10
       let history
@@ -1694,6 +1673,80 @@ const getUserDashboardAnalytics = async (req, res, next) => {
   }
 }
 
+const getUserPurchasedAccess = async (req, res, next) => {
+  try {
+    const userId = req.user._id.toString()
+    const response = {}
+
+    const individualPurchases = await UserAccess.find({
+      user_id: userId,
+      content_type: { $in: ['video', 'series'] },
+    })
+
+    const enrichedIndividualPurchases = await Promise.all(
+      individualPurchases.map(async (purchase) => {
+        let asset_data
+        if (purchase.content_type === 'video') {
+          asset_data = await LongVideo.findById(purchase.content_id).select(
+            'name description thumbnailUrl'
+          )
+        } else {
+          asset_data = await Series.findById(purchase.content_id).select(
+            'title description total_episodes bannerUrl posterUrl'
+          )
+        }
+
+        return {
+          ...purchase.toObject(),
+          asset_data,
+        }
+      })
+    )
+
+    const creatorPassesPurchased = await CreatorPass.find({
+      user_id: userId,
+    }).populate('creator_id', 'username profile_photo')
+
+    response.assets = enrichedIndividualPurchases
+    response.creator_passes = creatorPassesPurchased
+
+    res.status(200).json({
+      message: 'User purchased access data retrieved successfully',
+      data: response,
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const toggleCommentMonetization = async (req, res, next) => {
+  try {
+    const userId = req.user.id.toString()
+
+    const currentUser = await User.findById(userId).select(
+      'comment_monetization_enabled'
+    )
+    if (!currentUser) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+
+    const newStatus = !currentUser.comment_monetization_enabled
+
+    // Atomic update to avoid race conditions
+    await User.findByIdAndUpdate(
+      userId,
+      { $set: { comment_monetization_enabled: newStatus } },
+      { new: true }
+    )
+
+    return res.status(200).json({
+      message: `User comment monetization ${newStatus ? 'enabled' : 'disabled'} successfully`,
+    })
+  } catch (error) {
+    return handleError(error, req, res, next)
+  }
+}
+
 module.exports = {
   getUserProfileDetails,
   GetUserFeed,
@@ -1717,4 +1770,6 @@ module.exports = {
   getUserLikedVideosInCommunity,
   updateSocialMediaLinks,
   getUserDashboardAnalytics,
+  getUserPurchasedAccess,
+  toggleCommentMonetization,
 }
