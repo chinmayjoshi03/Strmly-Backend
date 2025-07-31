@@ -82,6 +82,10 @@ const userSchema = new mongoose.Schema(
       ref: 'LongVideo',
       default: [],
     },
+    FCM_token: {
+      type: String,
+      default: '',
+    },
     commented_videos: {
       type: [mongoose.Schema.Types.ObjectId],
       ref: 'LongVideo',
@@ -178,6 +182,28 @@ const userSchema = new mongoose.Schema(
         type: Number,
         default: 0,
         max: 10000,
+      },
+      creator_pass_deletion: {
+        deletion_requested: {
+          type: Boolean,
+          default: false,
+        },
+        deletion_requested_at: {
+          type: Date,
+          default: null,
+        },
+        deletion_reason: {
+          type: String,
+          default: null,
+        },
+        deletion_eligible_at: {
+          type: Date,
+          default: null,
+        },
+        last_subscriber_expires_at: {
+          type: Date,
+          default: null,
+        },
       },
     },
     phone: {

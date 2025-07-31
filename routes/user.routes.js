@@ -25,6 +25,7 @@ const {
   getUserDashboardAnalytics,
   getUserPurchasedAccess,
   toggleCommentMonetization,
+  saveUserFCMToken,
 } = require('../controller/user.controller')
 const { createImageMulter, handleMulterError } = require('../utils/utils')
 
@@ -43,10 +44,6 @@ router.put(
   handleMulterError
 )
 
-//get combined user analytics (revenue and non-revenue)
-//get data based on 'group' passed in req.query eg: ['videos','communities']
-//if group isn't passed then by default all the data is retrieved
-//possible groups: [videos, communities, followers, following, interactions, earnings, history ]
 router.get('/dashboard', authenticateToken, getUserDashboardAnalytics)
 
 //gets the videos, series and creator pass data which the user has purchased
@@ -58,6 +55,9 @@ router.put(
   authenticateToken,
   toggleCommentMonetization
 )
+
+//send firebase FCM token for the user
+router.post('/fcm_token', authenticateToken, saveUserFCMToken)
 
 // Get user communities
 router.get('/communities', authenticateToken, GetUserCommunities)
@@ -94,6 +94,17 @@ router.get('/videos/:id', authenticateToken, GetUserVideosById)
 
 // Set creator pass price
 router.put('/creator-pass-price', authenticateToken, SetCreatorPassPrice)
+
+// Check creator pass deletion status
+router.get(
+  '/creator-pass-deletion-status',
+  authenticateToken,
+  (req, res, next) => {
+    // Redirect to creator pass routes
+    req.url = '/deletion-status'
+    next()
+  }
+)
 
 // Check if user has creator pass for specific creator
 router.get('/has-creator-pass/:creatorId', authenticateToken, HasCreatorPass)
