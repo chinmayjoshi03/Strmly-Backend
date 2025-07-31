@@ -7,7 +7,6 @@ const UserAccess = require('../models/UserAccess')
 const Reshare = require('../models/Reshare')
 const { getRedisClient } = require('../config/redis')
 const CreatorPass = require('../models/CreatorPass')
-const Comment = require('../models/Comment')
 const Series = require('../models/Series')
 const GetUserFeed = async (req, res, next) => {
   try {
