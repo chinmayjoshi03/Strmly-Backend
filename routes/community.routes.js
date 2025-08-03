@@ -14,6 +14,7 @@ const {
   getCommunityVideos,
   getUserCommunities,
   getListOfCreators,
+  getCommunityFollowers,
   changeCommunityFounder,
   makeFirstJoinedCreatorFounder
 } = require('../controller/community.controller')
@@ -23,7 +24,8 @@ const { communityProfilePhotoUpload, validateCommunityProfilePhotoFormData } = r
 const { authenticateToken } = require('../middleware/auth')
 
 // API to create a community
-router.post('/create', authenticateToken, CreateCommunity)
+//accepts: FormData(name, bio, type, amount, fee_description, imageFile)
+router.post('/create', authenticateToken, communityProfilePhotoUpload, CreateCommunity)
 
 // API to rename a community
 router.put('/rename', authenticateToken, RenameCommunity)
@@ -73,6 +75,9 @@ router.get('/:id/trending-videos', getTrendingVideosByCommunity)
 router.get('/:id', authenticateToken, getCommunityById)
 
 router.get('/creators/:communityId',authenticateToken,getListOfCreators)
+
+// API to get community followers
+router.get('/followers/:communityId',authenticateToken,getCommunityFollowers)
 
 // API to change community founder
 router.post('/change-founder', authenticateToken, changeCommunityFounder)

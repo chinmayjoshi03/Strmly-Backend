@@ -18,14 +18,28 @@ const createSeries = async (req, res, next) => {
       release_date,
       seasons,
       communityId,
+      promisedEpisodesCount,
     } = req.body
 
-    if (!title || !description || !genre || !language || !type) {
+    if (
+      !title ||
+      !description ||
+      !genre ||
+      !language ||
+      !type ||
+      !promisedEpisodesCount
+    ) {
       return res.status(400).json({
-        error: 'Required fields: title, description, genre, language, type',
+        error:
+          'Required fields: title, description, genre, language, type, promisedEpisodesCount',
       })
     }
-
+    if (promisedEpisodesCount < 2) {
+      return res.status(400).json({
+        error:
+          'You must promise atleast 2 episodes to the viewers of your series',
+      })
+    }
     // Validate price based on type
     if (type === 'Paid') {
       if (!price || price <= 0) {
@@ -57,6 +71,7 @@ const createSeries = async (req, res, next) => {
       created_by: userId,
       updated_by: userId,
       community: communityId,
+      promised_episode_count: promisedEpisodesCount,
     })
 
     await series.save()
@@ -79,11 +94,15 @@ const getSeriesById = async (req, res, next) => {
       .populate('community', 'name')
       .populate({
         path: 'episodes',
+        select:
+          'name description thumbnailUrl season_number episode_number created_by videoUrl',
         populate: {
           path: 'created_by',
           select: 'username email',
         },
-        options: { sort: { season_number: 1, episode_number: 1 } },
+        options: {
+          sort: { season_number: 1, episode_number: 1 },
+        },
       })
 
     if (!series) {
@@ -106,8 +125,20 @@ const getUserSeries = async (req, res, next) => {
   }
   try {
     const series = await Series.find({ created_by: userId })
-      .populate('created_by', 'username email')
-      .populate('community', 'name')
+      .populate('created_by', 'username email profile_photo')
+      .populate('community', 'name profile_photo')
+      .populate({
+        path: 'episodes',
+        select:
+          'name description thumbnailUrl season_number episode_number created_by videoUrl',
+        populate: {
+          path: 'created_by',
+          select: 'username email',
+        },
+        options: {
+          sort: { season_number: 1, episode_number: 1 },
+        },
+      })
 
     if (!series || series.length === 0) {
       return res.status(404).json({ error: 'No series found for this user' })
@@ -398,8 +429,21 @@ const searchSeries = async (req, res, next) => {
     }
 
     const series = await Series.find(searchCriteria)
-      .populate('created_by', 'username email')
-      .populate('community', 'name')
+      .populate('created_by', 'username email profile_photo')
+      .populate('community', 'name profile_photo')
+      .populate({
+        path: 'episodes',
+        select:
+          'name description thumbnailUrl season_number episode_number created_by videoUrl',
+        populate: {
+          path: 'created_by',
+          select: 'username email',
+        },
+        options: {
+          sort: { season_number: 1, episode_number: 1 },
+        },
+      })
+
       .skip(skip)
       .limit(parseInt(limit))
       .sort({ createdAt: -1 })
@@ -426,8 +470,21 @@ const getAllSeries = async (req, res, next) => {
     const skip = (page - 1) * limit
 
     const series = await Series.find()
-      .populate('created_by', 'username email')
-      .populate('community', 'name')
+      .populate('created_by', 'username email profile_photo')
+      .populate('community', 'name profile_photo')
+      .populate({
+        path: 'episodes',
+        select:
+          'name description thumbnailUrl season_number episode_number created_by videoUrl',
+        populate: {
+          path: 'created_by',
+          select: 'username email',
+        },
+        options: {
+          sort: { season_number: 1, episode_number: 1 },
+        },
+      })
+
       .skip(skip)
       .limit(parseInt(limit))
       .sort({ createdAt: -1 })

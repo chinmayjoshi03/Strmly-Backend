@@ -1,22 +1,43 @@
-//const crypto = require('crypto')
-
-//const razorpay = require('../config/razorpay')
+const mongoose = require('mongoose')
 const CreatorPass = require('../models/CreatorPass')
 const User = require('../models/User')
-const verifyGooglePurchase = require('../utils/google_play_payments')
+const Wallet = require('../models/Wallet')
+const WalletTransaction = require('../models/WalletTransaction')
+const WalletTransfer = require('../models/WalletTransfer')
+const UserAccess = require('../models/UserAccess')
 const { handleError } = require('../utils/utils')
 
-/* const generateShortReceipt = (prefix, userId) => {
+/* const PLATFORM_FEE_PERCENTAGE = 30
+const CREATOR_SHARE_PERCENTAGE = 70 */
+
+const generateShortReceipt = (prefix, userId) => {
   const shortUserId = userId.toString().slice(-8)
   const timestamp = Date.now().toString().slice(-6)
   const random = Math.random().toString(36).substr(2, 4)
   return `${prefix}_${shortUserId}_${timestamp}_${random}`
 }
- */
-const createCreatorPassOrder = async (req, res, next) => {
+
+const getOrCreateWallet = async (userId, walletType = 'user') => {
+  let wallet = await Wallet.findOne({ user_id: userId })
+
+  if (!wallet) {
+    wallet = new Wallet({
+      user_id: userId,
+      balance: 0,
+      currency: 'INR',
+      wallet_type: walletType,
+      status: 'active',
+    })
+    await wallet.save()
+  }
+
+  return wallet
+}
+
+const purchaseCreatorPassWithWallet = async (req, res, next) => {
   try {
     const { creatorId } = req.body
-    const userId = req.user.id.toString()
+    const userId = req.user.id
 
     if (!creatorId) {
       return res.status(400).json({
@@ -92,254 +113,271 @@ const createCreatorPassOrder = async (req, res, next) => {
       })
     }
 
-    // Get creator pass price (default 199 if not set)
-    /* const amount = creator.creator_profile?.creator_pass_price || 199
+    // Get creator pass price
+    const amount = creator.creator_profile?.creator_pass_price || 199
 
-    const orderOptions = {
-      amount: Math.round(amount * 100), // Convert to paise
-      currency: 'INR',
-      receipt: generateShortReceipt('CP', userId),
-      notes: {
-        userId: userId,
-        creatorId: creatorId,
-        purpose: 'creator_pass',
-        creator_name: creator.username,
-      },
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Creator pass price is not set or invalid',
+        code: 'INVALID_CREATOR_PASS_PRICE',
+      })
     }
 
-    const razorpayOrder = await razorpay.orders.create(orderOptions)
+    // Get wallets
+    const userWallet = await getOrCreateWallet(userId, 'user')
+    const creatorWallet = await getOrCreateWallet(creatorId, 'creator')
 
-    res.status(201).json({
-      success: true,
-      message: 'Creator Pass order created successfully',
-      order: {
-        orderId: razorpayOrder.id,
-        amount: amount,
-        currency: 'INR',
-        receipt: razorpayOrder.receipt,
-        creatorName: creator.username,
-        duration: '30 days',
-      },
-      razorpayConfig: {
-        key: process.env.RAZORPAY_KEY_ID,
-        order_id: razorpayOrder.id,
-        amount: Math.round(amount * 100),
-        currency: 'INR',
-        name: 'Creator Pass',
-        description: `Creator Pass for ${creator.username} - Access all their content`,
-        prefill: {
-          name: req.user.username,
-          email: req.user.email,
+    // Check user's wallet balance
+    if (userWallet.balance < amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient wallet balance',
+        currentBalance: userWallet.balance,
+        requiredAmount: amount,
+        shortfall: amount - userWallet.balance,
+        suggestion: 'Please load more money to your wallet',
+        code: 'INSUFFICIENT_BALANCE',
+      })
+    }
+
+    // Check wallet statuses
+    if (userWallet.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        error: 'Your wallet is not active',
+        code: 'WALLET_INACTIVE',
+      })
+    }
+
+    if (creatorWallet.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        error: "Creator's wallet is not active",
+        code: 'CREATOR_WALLET_INACTIVE',
+      })
+    }
+
+    // Calculate revenue sharing
+    /*   const platformAmount = Math.round(amount * (PLATFORM_FEE_PERCENTAGE / 100))
+    const creatorAmount = amount - platformAmount */
+
+    const session = await mongoose.startSession()
+
+    const userBalanceBefore = userWallet.balance
+    const creatorBalanceBefore = creatorWallet.balance
+
+    try {
+      // Generate payment ID for creator pass
+      const paymentId = generateShortReceipt('CP', userId)
+      await session.withTransaction(async () => {
+        const userBalanceAfter = userBalanceBefore - amount
+        const creatorBalanceAfter = creatorBalanceBefore + amount
+
+        // Calculate pass dates (30 days duration)
+        const start_date = new Date()
+        const end_date = new Date(start_date)
+        end_date.setDate(end_date.getDate() + 30)
+
+        // Create wallet transfer record
+        const walletTransfer = new WalletTransfer({
+          sender_id: userId,
+          receiver_id: creatorId,
+          sender_wallet_id: userWallet._id,
+          receiver_wallet_id: creatorWallet._id,
+          total_amount: amount,
+          creator_amount: amount,
+          currency: 'INR',
+          transfer_type: 'creator_pass',
+          content_id: creatorId,
+          content_type: 'creator',
+          description: `Creator Pass purchase for ${creator.username}`,
+          sender_balance_before: userBalanceBefore,
+          sender_balance_after: userBalanceAfter,
+          receiver_balance_before: creatorBalanceBefore,
+          receiver_balance_after: creatorBalanceAfter,
+
+          status: 'completed',
+          metadata: {
+            creator_name: creator.username,
+            pass_duration: '30 days',
+            pass_start_date: start_date,
+            pass_end_date: end_date,
+          },
+        })
+
+        await walletTransfer.save({ session })
+
+        // Update wallets
+        userWallet.balance = userBalanceAfter
+        userWallet.total_spent += amount
+        userWallet.last_transaction_at = new Date()
+        await userWallet.save({ session })
+
+        creatorWallet.balance = creatorBalanceAfter
+        creatorWallet.total_received += amount
+        creatorWallet.revenue += amount
+        creatorWallet.last_transaction_at = new Date()
+        await creatorWallet.save({ session })
+
+        // Create user transaction
+        const userTransaction = new WalletTransaction({
+          wallet_id: userWallet._id,
+          user_id: userId,
+          transaction_type: 'debit',
+          transaction_category: 'creator_pass_purchase',
+          amount: amount,
+          currency: 'INR',
+          description: `Creator Pass purchase for ${creator.username} (₹${amount})`,
+          balance_before: userBalanceBefore,
+          balance_after: userBalanceAfter,
+          content_id: creatorId,
+          content_type: 'creator',
+          status: 'completed',
+          metadata: {
+            creator_name: creator.username,
+            pass_duration: '30 days',
+            transfer_id: walletTransfer._id,
+          },
+        })
+
+        await userTransaction.save({ session })
+
+        // Create creator transaction
+        const creatorTransaction = new WalletTransaction({
+          wallet_id: creatorWallet._id,
+          user_id: creatorId,
+          transaction_type: 'credit',
+          transaction_category: 'creator_earning',
+          amount: amount,
+          currency: 'INR',
+          description: `Creator Pass sale to ${req.user.username} ₹${amount})`,
+          balance_before: creatorBalanceBefore,
+          balance_after: creatorBalanceAfter,
+          content_id: userId,
+          content_type: 'creator_pass',
+          status: 'completed',
+          metadata: {
+            buyer_name: req.user.username,
+            pass_duration: '30 days',
+            transfer_id: walletTransfer._id,
+            total_amount: amount,
+          },
+        })
+
+        await creatorTransaction.save({ session })
+
+        // Create creator pass record
+        const creatorPass = new CreatorPass({
+          user_id: userId,
+          creator_id: creatorId,
+          amount_paid: amount,
+          start_date: start_date,
+          end_date: end_date,
+          status: 'active',
+          payment_id: paymentId,
+          razorpay_order_id: null, // Not using Razorpay anymore
+          razorpay_payment_id: null, // Not using Razorpay anymore
+          metadata: {
+            purchase_platform: 'wallet',
+            original_price: amount,
+            wallet_transfer_id: walletTransfer._id,
+          },
+        })
+
+        await creatorPass.save({ session })
+
+        // Create user access record for the creator
+        const userAccess = new UserAccess({
+          user_id: userId,
+          content_id: creatorId,
+          content_type: 'creator',
+          access_type: 'creator_pass',
+          payment_method: 'wallet_transfer',
+          payment_amount: amount,
+          granted_at: new Date(),
+          expires_at: end_date,
+          metadata: {
+            creator_pass_id: creatorPass._id,
+            wallet_transfer_id: walletTransfer._id,
+          },
+        })
+
+        await userAccess.save({ session })
+
+        // Update creator earnings
+        await User.findByIdAndUpdate(
+          creatorId,
+          {
+            $inc: {
+              'creator_profile.total_earned': amount,
+            },
+          },
+          { session }
+        )
+      })
+
+      await session.endSession()
+
+      res.status(200).json({
+        success: true,
+        message: 'Creator Pass purchased successfully!',
+        creatorPass: {
+          id: paymentId,
+          creatorName: creator.username,
+          amount: amount,
+          creatorAmount: amount,
+
+          startDate: new Date(),
+          endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          status: 'active',
+          duration: '30 days',
         },
-      },
-    }) */
-    res.status(201).json({
-      success: true,
-      message: 'Creator Pass order created successfully',
-    })
+        wallet: {
+          balanceBefore: userBalanceBefore,
+          balanceAfter: userWallet.balance,
+          currentBalance: userWallet.balance,
+        },
+        benefits: {
+          message: `You now have unlimited access to all content by ${creator.username}!`,
+          features: [
+            "Access to all creator's paid videos",
+            "Access to all creator's paid series",
+            'Priority support from creator',
+            'Exclusive content access',
+          ],
+        },
+      })
+    } catch (transactionError) {
+      await session.abortTransaction()
+      throw transactionError
+    } finally {
+      if (session.inTransaction()) {
+        await session.endSession()
+      }
+    }
   } catch (error) {
     handleError(error, req, res, next)
   }
 }
 
+// Remove Razorpay-based functions and replace with wallet-based
+const createCreatorPassOrder = async (req, res, next) => {
+  return res.status(410).json({
+    success: false,
+    error: 'This endpoint is deprecated. Use wallet-based purchase instead.',
+    code: 'ENDPOINT_DEPRECATED',
+    newEndpoint: '/api/v1/creator-pass/purchase-with-wallet',
+  })
+}
+
 const verifyCreatorPassPayment = async (req, res, next) => {
-  try {
-    /*     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
-      req.body
-    const userId = req.user.id
-
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required payment verification fields',
-        code: 'MISSING_PAYMENT_FIELDS',
-      })
-    }
-
-    // Verify signature
-    const generated_signature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(razorpay_order_id + '|' + razorpay_payment_id)
-      .digest('hex')
-
-    if (generated_signature !== razorpay_signature) {
-      return res.status(400).json({
-        success: false,
-        error: 'Payment verification failed. Invalid signature.',
-        code: 'SIGNATURE_VERIFICATION_FAILED',
-      })
-    }
-
-    // Check if payment already processed
-    const existingPass = await CreatorPass.findOne({
-      razorpay_payment_id: razorpay_payment_id,
-      user_id: userId,
-    })
-
-    if (existingPass) {
-      return res.status(400).json({
-        success: false,
-        error: 'Payment already processed',
-        code: 'PAYMENT_ALREADY_PROCESSED',
-      })
-    }
-
-    // Fetch payment details from Razorpay
-    const payment = await razorpay.payments.fetch(razorpay_payment_id)
-
-    if (payment.status !== 'captured') {
-      return res.status(400).json({
-        success: false,
-        error: 'Payment not captured successfully',
-        code: 'PAYMENT_NOT_CAPTURED',
-      })
-    }
-
-    const creatorId = payment.notes.creatorId
-    const amount = payment.amount / 100
-
-    // Calculate pass dates (30 days duration)
-    const start_date = new Date()
-    const end_date = new Date(start_date)
-    end_date.setDate(end_date.getDate() + 30)
-
-    // Get creator details
-    const creator = await User.findById(creatorId).select('username')
-
-    // Create creator pass record
-    const creatorPass = new CreatorPass({
-      user_id: userId,
-      creator_id: creatorId,
-      amount_paid: amount,
-      start_date: start_date,
-      end_date: end_date,
-      status: 'active',
-      payment_id: razorpay_payment_id,
-      razorpay_order_id: razorpay_order_id,
-      razorpay_payment_id: razorpay_payment_id,
-      metadata: {
-        purchase_platform: 'web',
-        original_price: amount,
-      },
-    })
-
-    await creatorPass.save()
-
-    res.status(200).json({
-      success: true,
-      message: 'Creator Pass activated successfully!',
-      creatorPass: {
-        id: creatorPass._id,
-        creatorName: creator.username,
-        amount: amount,
-        startDate: start_date,
-        endDate: end_date,
-        status: 'active',
-      },
-      benefits: {
-        message: `You now have unlimited access to all content by ${creator.username}!`,
-        features: [
-          "Access to all creator's paid videos",
-          "Access to all creator's paid series",
-          'Priority support from creator',
-          'Exclusive content access',
-        ],
-      },
-    }) */
-    const {
-      google_order_id,
-      google_purchase_token,
-      google_product_id,
-      creatorId,
-      amount,
-    } = req.body
-    const userId = req.user.id.toString()
-
-    if (!google_order_id || !google_purchase_token || !google_product_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required payment verification fields',
-        code: 'MISSING_PAYMENT_FIELDS',
-      })
-    }
-    // Check if payment already processed
-    const existingPass = await CreatorPass.findOne({
-      google_order_id: google_order_id,
-      user_id: userId,
-    })
-
-    if (existingPass) {
-      return res.status(400).json({
-        success: false,
-        error: 'Payment already processed',
-        code: 'PAYMENT_ALREADY_PROCESSED',
-      })
-    }
-
-    // Fetch payment details from Razorpay
-    const payment = await verifyGooglePurchase(
-      google_product_id,
-      google_purchase_token
-    )
-
-    if (!payment.valid) {
-      return res.status(400).json({
-        success: false,
-        error: 'Payment not captured successfully',
-        code: 'PAYMENT_NOT_CAPTURED',
-      })
-    }
-
-    // Calculate pass dates (30 days duration)
-    const start_date = new Date()
-    const end_date = new Date(start_date)
-    end_date.setDate(end_date.getDate() + 30)
-
-    // Get creator details
-    const creator = await User.findById(creatorId).select('username')
-
-    // Create creator pass record
-    const creatorPass = new CreatorPass({
-      user_id: userId,
-      creator_id: creatorId,
-      amount_paid: amount,
-      start_date: start_date,
-      end_date: end_date,
-      status: 'active',
-      google_order_id: google_order_id,
-
-      metadata: {
-        purchase_platform: 'android',
-        original_price: amount,
-      },
-    })
-
-    await creatorPass.save()
-
-    res.status(200).json({
-      success: true,
-      message: 'Creator Pass activated successfully!',
-      creatorPass: {
-        id: creatorPass._id,
-        creatorName: creator.username,
-        amount: amount,
-        startDate: start_date,
-        endDate: end_date,
-        status: 'active',
-      },
-      benefits: {
-        message: `You now have unlimited access to all content by ${creator.username}!`,
-        features: [
-          "Access to all creator's paid videos",
-          "Access to all creator's paid series",
-          'Priority support from creator',
-          'Exclusive content access',
-        ],
-      },
-    })
-  } catch (error) {
-    handleError(error, req, res, next)
-  }
+  return res.status(410).json({
+    success: false,
+    error: 'This endpoint is deprecated. Use wallet-based purchase instead.',
+    code: 'ENDPOINT_DEPRECATED',
+    newEndpoint: '/api/v1/creator-pass/purchase-with-wallet',
+  })
 }
 
 const checkCreatorPassAccess = async (userId, creatorId) => {
@@ -882,8 +920,9 @@ const manuallyDeleteCreatorPass = async (req, res, next) => {
 }
 
 module.exports = {
-  createCreatorPassOrder,
-  verifyCreatorPassPayment,
+  purchaseCreatorPassWithWallet,
+  createCreatorPassOrder, // Deprecated
+  verifyCreatorPassPayment, // Deprecated
   getCreatorPassStatus,
   checkCreatorPassAccess,
   cancelCreatorPass,

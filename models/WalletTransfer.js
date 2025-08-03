@@ -33,7 +33,6 @@ const walletTransferSchema = new mongoose.Schema(
     },
     platform_amount: {
       type: Number,
-      required: true,
     },
     currency: {
       type: String,
@@ -46,6 +45,7 @@ const walletTransferSchema = new mongoose.Schema(
       enum: [
         'series_purchase',
         'video_purchase',
+        'video_gift',
         'tip',
         'gift',
         'comment_gift',
@@ -54,12 +54,16 @@ const walletTransferSchema = new mongoose.Schema(
         'creator_pass',
       ],
     },
-    content_id: {
-      type: mongoose.Schema.Types.ObjectId,
-    },
     content_type: {
       type: String,
-      enum: ['Series', 'LongVideo', 'series', 'comment', 'Community'],
+      enum: [
+        'Series',
+        'LongVideo',
+        'series',
+        'comment',
+        'Community',
+        'creator',
+      ],
     },
     description: {
       type: String,

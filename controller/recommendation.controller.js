@@ -8,7 +8,7 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
     const userId = req.user.id
     const { page = 1, batchSize = 5 } = req.query
 
-    const user = await User.findById(userId).select('interests viewed_videos')
+    const user = await User.findById(userId).select('interests viewed_videos following')
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' })
@@ -16,19 +16,38 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
 
     const userInterests = user.interests || []
     const viewedVideoIds = user.viewed_videos || []
+    const followingIds = user.following || []
 
     let recommendedVideos = []
     
     if (userInterests.length > 0) {
       const interestedVideos = await LongVideo.find({
-        genre: { $in: userInterests },
-        _id: { $nin: viewedVideoIds },
-        visibility: { $ne: 'hidden' }
-      })
+          genre: { $in: userInterests },
+          _id: { $nin: viewedVideoIds },
+          visibility: { $ne: 'hidden' }
+        })
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo')
+        .populate({
+          path: 'series',
+          populate: {
+            path: 'episodes',
+            select: 'name episode_number season_number thumbnailUrl views likes',
+            options: { sort: { season_number: 1, episode_number: 1 } },
+          },
+        })
         .sort({ views: -1, likes: -1 })
         .limit(Math.ceil(batchSize * 0.7))
+
+
+        // add if user is following the creator
+        interestedVideos.forEach(video => {
+          if (video.created_by && followingIds.includes(video.created_by._id.toString())) {
+            video.is_following_creator = true
+          } else {
+            video.is_following_creator = false
+          }
+        })
 
       recommendedVideos.push(...interestedVideos)
     }
@@ -47,15 +66,32 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
       })
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo')
+        .populate({
+          path: 'series',
+          populate: {
+            path: 'episodes',
+            select: 'name episode_number season_number thumbnailUrl views likes',
+            options: { sort: { season_number: 1, episode_number: 1 } },
+          },
+        })
         .sort({ views: -1, likes: -1 })
         .limit(Math.floor(batchSize * 0.3) + 1)
 
+        randomVideos.forEach(video => {
+          if (video.created_by && followingIds.includes(video.created_by._id.toString())) {
+            video.is_following_creator = true
+          } else {
+            video.is_following_creator = false
+          }
+        })
       recommendedVideos.push(...randomVideos)
     }
 
-    // Get reshared videos 
+    // Get reshared videos - Only from users that the current user follows
     const resharedVideoSkip = (page - 1) * 2
-    const resharedVideos = await Reshare.find({})
+    const resharedVideos = await Reshare.find({
+      user: { $in: followingIds }  // Only get reshares from followed users
+    })
       .sort({ createdAt: -1 })
       .skip(resharedVideoSkip)
       .limit(2)
@@ -67,20 +103,11 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
           { path: 'community', select: 'name profile_photo' },
         ],
       })
-
     // Shuffle the combined array for better variety
     recommendedVideos = shuffleArray(recommendedVideos)
     
     // we limit to requested batch size
     recommendedVideos = recommendedVideos.slice(0, batchSize)
-
-    // Mark videos as viewed - ONLY the ones that are actually sent to user
-    if (recommendedVideos.length > 0) {
-      const videoIds = recommendedVideos.map(video => video._id)
-      await User.findByIdAndUpdate(userId, {
-        $addToSet: { viewed_videos: { $each: videoIds } }
-      })
-    }
 
     res.status(200).json({
       message: 'Personalized recommendations retrieved successfully',

@@ -84,6 +84,12 @@ const uploadVideo = async (req, res, next) => {
       is_standalone,
     } = req.body
 
+    console.log('📤 Video upload request received:')
+    console.log('🎬 Series ID:', seriesId)
+    console.log('📝 Video name:', name)
+    console.log('🏠 Community ID:', communityId)
+    console.log('🎭 Is standalone:', is_standalone)
+
     if (!userId) {
       console.error(' User ID not found in request')
       return res.status(400).json({ error: 'User ID is required' })
@@ -184,10 +190,53 @@ const uploadVideo = async (req, res, next) => {
 
     await savedVideo.save()
 
-    await Community.findByIdAndUpdate(communityId, {
-      $push: { long_videos: savedVideo._id },
-      $addToSet: { creators: userId },
-    })
+    // Update community with new video
+    if (communityId) {
+      await Community.findByIdAndUpdate(communityId, {
+        $push: { long_videos: savedVideo._id },
+        $addToSet: { creators: userId },
+      })
+    }
+
+    // If video belongs to a series, add it to the series episodes
+    if (seriesId) {
+      try {
+        const Series = require('../models/Series')
+        
+        // Get the series to check if it exists and get current episode count
+        const series = await Series.findById(seriesId)
+        if (series && series.created_by.toString() === userId.toString()) {
+          // Calculate next episode number
+          const nextEpisodeNumber = (series.total_episodes || 0) + 1
+          
+          // Update the video with episode information
+          await LongVideo.findByIdAndUpdate(savedVideo._id, {
+            episode_number: nextEpisodeNumber,
+            season_number: 1, // Default to season 1
+            is_standalone: false
+          })
+          
+          // Add video to series episodes and update analytics
+          await Series.findByIdAndUpdate(seriesId, {
+            $addToSet: { episodes: savedVideo._id },
+            $inc: {
+              total_episodes: 1,
+              'analytics.total_likes': savedVideo.likes || 0,
+              'analytics.total_views': savedVideo.views || 0,
+              'analytics.total_shares': savedVideo.shares || 0,
+            },
+            $set: { 'analytics.last_analytics_update': new Date() },
+          })
+          
+          console.log(`✅ Video ${savedVideo._id} added to series ${seriesId} as episode ${nextEpisodeNumber}`)
+        } else {
+          console.error(`❌ Series ${seriesId} not found or user ${userId} not authorized`)
+        }
+      } catch (seriesError) {
+        console.error('❌ Error adding video to series:', seriesError)
+        // Don't fail the entire upload, just log the error
+      }
+    }
 
     res.status(200).json({
       message: 'Video uploaded successfully',
@@ -421,9 +470,53 @@ const finaliseChunkUpload = async (req, res, next) => {
 
     await savedVideo.save()
 
-    await Community.findByIdAndUpdate(communityId, {
-      $push: { long_videos: savedVideo._id },
-    })
+    // Update community with new video
+    if (communityId) {
+      await Community.findByIdAndUpdate(communityId, {
+        $push: { long_videos: savedVideo._id },
+        $addToSet: { creators: userId },
+      })
+    }
+
+    // If video belongs to a series, add it to the series episodes
+    if (seriesId) {
+      try {
+        const Series = require('../models/Series')
+        
+        // Get the series to check if it exists and get current episode count
+        const series = await Series.findById(seriesId)
+        if (series && series.created_by.toString() === userId.toString()) {
+          // Calculate next episode number
+          const nextEpisodeNumber = (series.total_episodes || 0) + 1
+          
+          // Update the video with episode information
+          await LongVideo.findByIdAndUpdate(savedVideo._id, {
+            episode_number: nextEpisodeNumber,
+            season_number: 1, // Default to season 1
+            is_standalone: false
+          })
+          
+          // Add video to series episodes and update analytics
+          await Series.findByIdAndUpdate(seriesId, {
+            $addToSet: { episodes: savedVideo._id },
+            $inc: {
+              total_episodes: 1,
+              'analytics.total_likes': savedVideo.likes || 0,
+              'analytics.total_views': savedVideo.views || 0,
+              'analytics.total_shares': savedVideo.shares || 0,
+            },
+            $set: { 'analytics.last_analytics_update': new Date() },
+          })
+          
+          console.log(`✅ Video ${savedVideo._id} added to series ${seriesId} as episode ${nextEpisodeNumber}`)
+        } else {
+          console.error(`❌ Series ${seriesId} not found or user ${userId} not authorized`)
+        }
+      } catch (seriesError) {
+        console.error('❌ Error adding video to series:', seriesError)
+        // Don't fail the entire upload, just log the error
+      }
+    }
 
     res.status(200).json({
       message: 'Video uploaded successfully',
@@ -686,9 +779,12 @@ const getTrendingVideos = async (req, res, next) => {
     const skip = (page - 1) * limit
 
     let videos = await LongVideo.find({})
-      .populate('created_by', 'username email')
-      .populate('community', 'name')
-      .populate('series', 'title')
+      .populate('created_by', 'username email profile_photo')
+      .populate('community', 'name profile_photo')
+      .populate(
+        'series',
+        'title description total_episodes bannerUrl posterUrl _id created_by episodes'
+      )
       .sort({ views: -1, likes: -1, createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))

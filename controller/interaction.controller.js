@@ -301,6 +301,24 @@ const CommentOnVideo = async (req, res, next) => {
     res.status(200).json({
       message: 'Comment added successfully',
       comments: video.comments.length,
+      comment: {
+        _id: newComment._id,
+        content: newComment.content,
+        videoId: videoId,
+        replies: 0,
+        timestamp: newComment.createdAt,
+        donations: 0,
+        upvotes: 0,
+        downvotes: 0,
+        user: {
+          id: user._id,
+          name: user.username,
+          avatar: user.profile_photo || 'https://api.dicebear.com/7.x/identicon/svg?seed=anonymous',
+        },
+        upvoted: false,
+        downvoted: false,
+        is_monetized: newComment.is_monetized,
+      }
     })
   } catch (error) {
     handleError(error, req, res, next)
@@ -321,7 +339,14 @@ const getVideoComments = async (req, res, next) => {
     }
 
     const video = await LongVideo.findById(videoId)
-      .populate('comments.user', 'username profile_photo')
+      .populate({
+        path: 'comments',
+        populate: {
+          path: 'user',
+          select: 'username profile_photo'
+        },
+        options: { sort: { createdAt: -1 } } // Sort comments by newest first
+      })
       .populate('created_by', 'username profile_photo')
 
     if (!video) {
@@ -332,30 +357,60 @@ const getVideoComments = async (req, res, next) => {
       })
     }
 
-    const comments = video.comments.map((comment) => ({
-      _id: comment._id,
-      content: comment.content,
-      videoId: videoId,
-      replies: comment.replies ? comment.replies.length : 0,
-      timestamp: comment.createdAt,
-      donations: comment.donations || 0,
-      upvotes: comment.upvotes || 0,
-      downvotes: comment.downvotes || 0,
-      likes: comment.likes || 0,
-      user: {
-        id: comment.user._id,
-        name: comment.user.username,
-        avatar: comment.user.profile_photo || '',
-      },
-      upvoted: comment.upvoted_by ? comment.upvoted_by.includes(userId) : false,
-      downvoted: comment.downvoted_by
-        ? comment.downvoted_by.includes(userId)
-        : false,
-      liked: comment.liked_by ? comment.liked_by.includes(userId) : false,
-      is_monetized: comment.is_monetized,
-    }))
+    // Log comment structure for debugging
+    console.log(`📝 Found ${video.comments?.length || 0} comments for video ${videoId}`)
 
-    res.status(200).json(comments)
+    // Check for comments with missing users or content
+    const commentsWithoutUsers = video.comments?.filter(comment => !comment || !comment.user) || []
+    const commentsWithoutContent = video.comments?.filter(comment => comment && comment.user && !comment.content) || []
+    
+    if (commentsWithoutUsers.length > 0) {
+      console.log(`⚠️ Found ${commentsWithoutUsers.length} comments with missing user data`)
+    }
+    if (commentsWithoutContent.length > 0) {
+      console.log(`⚠️ Found ${commentsWithoutContent.length} comments with missing content`)
+    }
+
+    const comments = video.comments
+      .filter(comment => comment && comment.user && comment.content) // Filter out comments without valid users or content
+      .map((comment) => {
+        // Debug comment content
+        console.log(`💬 Comment ${comment._id}: content="${comment.content}"`)
+
+        return {
+          _id: comment._id,
+          content: comment.content,
+          videoId: videoId,
+          replies: comment.replies ? comment.replies.length : 0,
+          timestamp: comment.createdAt,
+          donations: comment.donations || 0,
+          upvotes: comment.upvotes || 0,
+          downvotes: comment.downvotes || 0,
+          likes: comment.likes || 0,
+          user: {
+            id: comment.user._id,
+            name: comment.user.username || 'Anonymous User',
+            avatar: comment.user.profile_photo || 'https://api.dicebear.com/7.x/identicon/svg?seed=anonymous',
+          },
+          upvoted: comment.upvoted_by ? comment.upvoted_by.includes(userId) : false,
+          downvoted: comment.downvoted_by
+            ? comment.downvoted_by.includes(userId)
+            : false,
+          liked: comment.liked_by ? comment.liked_by.includes(userId) : false,
+          is_monetized: comment.is_monetized,
+        }
+      })
+
+    res.status(200).json({
+      message: 'Comments fetched successfully',
+      comments: comments,
+      pagination: {
+        page: parseInt(req.query.page) || 1,
+        limit: parseInt(req.query.limit) || 10,
+        total: comments.length,
+        totalPages: Math.ceil(comments.length / (parseInt(req.query.limit) || 10))
+      }
+    })
   } catch (error) {
     handleError(error, req, res, next)
   }
@@ -379,31 +434,56 @@ const getCommentReplies = async (req, res, next) => {
     }).populate('user', '_id username profile_photo')
 
     if (!commentReplies || commentReplies.length === 0) {
-      res.status(200).json({ replies: [] })
+      res.status(200).json({
+        message: 'No replies found',
+        replies: [],
+        pagination: {
+          page: parseInt(req.query.page) || 1,
+          limit: parseInt(req.query.limit) || 5,
+          total: 0,
+          totalPages: 0
+        }
+      })
       return
     }
 
-    const replies = commentReplies.map((reply) => ({
-      _id: reply._id,
-      content: reply.content,
-      parentId: commentId,
-      timestamp: reply.createdAt,
-      donations: reply.donations || 0,
-      upvotes: reply.upvotes || 0,
-      downvotes: reply.downvotes || 0,
-      user: {
-        id: reply.user._id,
-        name: reply.user.username,
-        username: reply.user.username,
-        avatar: reply.user.profile_photo || '',
-      },
-      upvoted: reply.upvoted_by ? reply.upvoted_by.includes(userId) : false,
-      downvoted: reply.downvoted_by
-        ? reply.downvoted_by.includes(userId)
-        : false,
-    }))
+    const replies = commentReplies
+      .filter(reply => reply && reply.user && reply.content) // Filter out replies without valid users or content
+      .map((reply) => {
+        // Debug reply content
+        console.log(`💬 Reply ${reply._id}: content="${reply.content}"`)
 
-    res.status(200).json(replies)
+        return {
+          _id: reply._id,
+          content: reply.content,
+          parentId: commentId,
+          timestamp: reply.createdAt,
+          donations: reply.donations || 0,
+          upvotes: reply.upvotes || 0,
+          downvotes: reply.downvotes || 0,
+          user: {
+            id: reply.user._id,
+            name: reply.user.username || 'Anonymous User',
+            username: reply.user.username || 'anonymous',
+            avatar: reply.user.profile_photo || 'https://api.dicebear.com/7.x/identicon/svg?seed=anonymous',
+          },
+          upvoted: reply.upvoted_by ? reply.upvoted_by.includes(userId) : false,
+          downvoted: reply.downvoted_by
+            ? reply.downvoted_by.includes(userId)
+            : false,
+        }
+      })
+
+    res.status(200).json({
+      message: 'Replies fetched successfully',
+      replies: replies,
+      pagination: {
+        page: parseInt(req.query.page) || 1,
+        limit: parseInt(req.query.limit) || 5,
+        total: replies.length,
+        totalPages: Math.ceil(replies.length / (parseInt(req.query.limit) || 5))
+      }
+    })
   } catch (error) {
     handleError(error, req, res, next)
   }
@@ -415,17 +495,45 @@ const upvoteComment = async (req, res, next) => {
     const { videoId, commentId } = req.body
     const userId = req.user.id
 
+    console.log('🔍 Upvote request:', { videoId, commentId, userId });
+
+    // Validate required fields
+    if (!videoId || !commentId) {
+      console.log('❌ Missing required fields:', { videoId, commentId });
+      return res.status(400).json({ error: 'Video ID and Comment ID are required' })
+    }
+
     const video = await LongVideo.findById(videoId)
     const user = await User.findById(userId).select(
       'username profile_photo FCM_token'
     )
+    
     if (!video) {
+      console.log('❌ Video not found:', videoId);
       return res.status(404).json({ error: 'Video not found' })
     }
 
-    const comment = video.comments.id(commentId)
+    console.log('📹 Video found:', video.name);
+
+    // Find the comment by ID (since comments are now ObjectId references)
+    const comment = await Comment.findById(commentId)
     if (!comment) {
+      console.log('❌ Comment not found:', commentId);
       return res.status(404).json({ error: 'Comment not found' })
+    }
+
+    console.log('📝 Comment found:', {
+      id: comment._id,
+      content: comment.content.substring(0, 50),
+      videoId: comment.long_video,
+      upvotes: comment.upvotes,
+      upvoted_by_count: comment.upvoted_by.length
+    });
+
+    // Verify comment belongs to this video
+    if (comment.long_video.toString() !== videoId) {
+      console.log('❌ Comment video mismatch:', { commentVideo: comment.long_video.toString(), requestVideo: videoId });
+      return res.status(400).json({ error: 'Comment does not belong to this video' })
     }
 
     // Remove from downvotes if exists
@@ -436,15 +544,21 @@ const upvoteComment = async (req, res, next) => {
 
     // Toggle upvote
     const alreadyUpvoted = comment.upvoted_by.includes(userId)
+    console.log('🔍 Vote status:', { alreadyUpvoted, userId, upvoted_by: comment.upvoted_by });
+    
     if (alreadyUpvoted) {
       comment.upvoted_by.pull(userId)
       comment.upvotes = Math.max(0, comment.upvotes - 1)
+      console.log('👎 Removed upvote');
     } else {
       comment.upvoted_by.push(userId)
       comment.upvotes += 1
+      console.log('👍 Added upvote');
     }
 
-    await video.save()
+    await comment.save()
+    console.log('✅ Comment saved with new vote count:', comment.upvotes);
+    
     if (!alreadyUpvoted) {
       //add upvote notification to queue
       const commentcreator = comment.user.toString()
@@ -462,6 +576,7 @@ const upvoteComment = async (req, res, next) => {
         user.FCM_token
       )
     }
+    
     res.status(200).json({
       success: true,
       upvotes: comment.upvotes,
@@ -470,6 +585,7 @@ const upvoteComment = async (req, res, next) => {
       downvoted: comment.downvoted_by.includes(userId),
     })
   } catch (error) {
+    console.error('❌ Error in upvoteComment:', error)
     handleError(error, req, res, next)
   }
 }
@@ -479,15 +595,26 @@ const downvoteComment = async (req, res, next) => {
     const { videoId, commentId } = req.body
     const userId = req.user.id
 
+    // Validate required fields
+    if (!videoId || !commentId) {
+      return res.status(400).json({ error: 'Video ID and Comment ID are required' })
+    }
+
     const video = await LongVideo.findById(videoId)
 
     if (!video) {
       return res.status(404).json({ error: 'Video not found' })
     }
 
-    const comment = video.comments.id(commentId)
+    // Find the comment by ID (since comments are now ObjectId references)
+    const comment = await Comment.findById(commentId)
     if (!comment) {
       return res.status(404).json({ error: 'Comment not found' })
+    }
+
+    // Verify comment belongs to this video
+    if (comment.long_video.toString() !== videoId) {
+      return res.status(400).json({ error: 'Comment does not belong to this video' })
     }
 
     // Remove from upvotes if exists
@@ -505,7 +632,7 @@ const downvoteComment = async (req, res, next) => {
       comment.downvotes += 1
     }
 
-    await video.save()
+    await comment.save()
 
     res.status(200).json({
       success: true,
@@ -515,6 +642,7 @@ const downvoteComment = async (req, res, next) => {
       downvoted: comment.downvoted_by.includes(userId),
     })
   } catch (error) {
+    console.error('❌ Error in downvoteComment:', error)
     handleError(error, req, res, next)
   }
 }

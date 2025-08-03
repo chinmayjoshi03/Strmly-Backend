@@ -38,6 +38,10 @@ const GetUserFeed = async (req, res, next) => {
     })
       .populate('created_by', 'username profile_photo')
       .populate('community', 'name profile_photo')
+      .populate(
+        'series',
+        'title description price genre episodes seasons total_episodes'
+      )
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit - 2))
@@ -58,8 +62,10 @@ const GetUserFeed = async (req, res, next) => {
         .limit(3)
     }
 
-    // Get reshared videos
-    const resharedVideos = await Reshare.find({})
+    // Get reshared videos - Only from users that the current user follows
+    const resharedVideos = await Reshare.find({
+      user: { $in: followingIds }, // Only get reshares from followed users
+    })
       .sort({ createdAt: -1 })
       .skip(resharedVideoSkip)
       .limit(2)
@@ -71,15 +77,6 @@ const GetUserFeed = async (req, res, next) => {
           { path: 'community', select: 'name profile_photo' },
         ],
       })
-
-    // Mark feed videos as viewed
-    if (feedVideos.length > 0) {
-      const feedVideoIds = feedVideos.map((video) => video._id)
-      await User.findByIdAndUpdate(userId, {
-        $addToSet: { viewed_videos: { $each: feedVideoIds } },
-      })
-    }
-
     console.log('Recommended videos from interests:', recommendedVideos)
 
     res.status(200).json({
@@ -128,7 +125,14 @@ const GetUserProfile = async (req, res, next) => {
 const UpdateUserProfile = async (req, res, next) => {
   try {
     const userId = req.user._id
-    const { username, bio, date_of_birth, interests, uniqueId } = req.body
+    const {
+      username,
+      bio,
+      date_of_birth,
+      interests,
+      uniqueId,
+      content_interests,
+    } = req.body
     const profilePhotoFile = req.file
 
     const updateData = {}
@@ -136,6 +140,7 @@ const UpdateUserProfile = async (req, res, next) => {
     if (bio !== undefined) updateData.bio = bio
     if (date_of_birth !== undefined) updateData.date_of_birth = date_of_birth
     if (uniqueId) updateData.uniqueId = uniqueId
+    if (content_interests) updateData.content_interests = content_interests
 
     // Parse interests from JSON string
     if (interests) {
@@ -235,7 +240,7 @@ const UpdateUserProfile = async (req, res, next) => {
 
 const GetUserCommunities = async (req, res, next) => {
   try {
-    const userId = req.user._id
+    const userId = req.user.id.toString()
     const { type = 'all' } = req.query
 
     let communities
@@ -253,22 +258,40 @@ const GetUserCommunities = async (req, res, next) => {
         },
       })
       communities = user.community
-    } else {
-      const createdCommunities = await Community.find({ founder: userId })
-        .populate('followers', 'username profile_photo')
-        .populate('creators', 'username profile_photo')
-
+    } else if (type === 'following') {
       const user = await User.findById(userId).populate({
-        path: 'community',
+        path: 'following_communities',
         populate: {
           path: 'founder',
           select: 'username profile_photo',
         },
       })
+      communities = user.following_communities
+    } else {
+      const createdCommunities = await Community.find({ founder: userId })
+        .populate('followers', 'username profile_photo')
+        .populate('creators', 'username profile_photo')
+
+      const user = await User.findById(userId)
+        .populate({
+          path: 'community',
+          populate: {
+            path: 'founder',
+            select: 'username profile_photo',
+          },
+        })
+        .populate({
+          path: 'following_communities',
+          populate: {
+            path: 'founder',
+            select: 'username profile_photo',
+          },
+        })
 
       communities = {
         created: createdCommunities,
         joined: user.community,
+        following: user.following_communities,
       }
     }
 
@@ -689,7 +712,7 @@ const GetUserNotifications = async (req, res, next) => {
 const UpdateUserInterests = async (req, res, next) => {
   try {
     const userId = req.user._id
-    const { interests } = req.body
+    const { interests, type } = req.body
 
     if (!Array.isArray(interests) || interests.length === 0) {
       return res
@@ -697,24 +720,34 @@ const UpdateUserInterests = async (req, res, next) => {
         .json({ message: 'Interests must be a non-empty array' })
     }
 
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      { interests },
-      { new: true, runValidators: true }
-    ).select('-password')
-
-    if (!updatedUser) {
+    const user = await User.findById(userId)
+    if (!user) {
       return res.status(404).json({ message: 'User not found' })
     }
 
+    if (type === "interest1") {
+      user.interest1 = interests
+    } else if (type === "interest2") {
+      user.interest2 = interests
+    } else {
+      user.interests = interests
+    }
+
+    await user.save()
+
     res.status(200).json({
       message: 'User interests updated successfully',
-      user: updatedUser,
+      user: {
+        interests: user.interests,
+        interest1: user.interest1,
+        interest2: user.interest2,
+      },
     })
   } catch (error) {
     handleError(error, req, res, next)
   }
 }
+
 
 const GetUserFollowers = async (req, res, next) => {
   try {
@@ -828,6 +861,7 @@ const GetUserProfileById = async (req, res, next) => {
     const userId = req.params.id
     const redis = getRedisClient()
     const cacheKey = `user_profile_public:${userId}`
+    const userid=req.user.id;
 
     if (redis) {
       const cachedProfile = await redis.get(cacheKey)
@@ -850,6 +884,7 @@ const GetUserProfileById = async (req, res, next) => {
     const totalFollowers = userDetails.followers?.length || 0
     const totalFollowing = userDetails.following?.length || 0
     const totalCommunities = userDetails.my_communities?.length || 0
+    const isBeingFollowed= userDetails.followers?.includes(userid) || false;
 
     const result = {
       message: 'User profile details retrieved successfully',
@@ -859,6 +894,7 @@ const GetUserProfileById = async (req, res, next) => {
         totalFollowers,
         totalFollowing,
         totalCommunities,
+        isBeingFollowed,
         social_media_links: userDetails.social_media_links || {},
       },
       cached: false,
@@ -1038,6 +1074,7 @@ const followUser = async (req, res, next) => {
 
     res.status(200).json({
       message: 'User followed successfully',
+      isFollowing: true,
       user: {
         id: followUser._id,
         username: followUser.username,
@@ -1088,6 +1125,7 @@ const unfollowUser = async (req, res, next) => {
     await unfollowUser.save()
     res.status(200).json({
       message: 'User unfollowed successfully',
+      isFollowing: false,
       user: {
         id: unfollowUser._id,
         username: unfollowUser.username,
@@ -1554,32 +1592,49 @@ const getUserDashboardAnalytics = async (req, res, next) => {
 
       response.interactions = interactions
     }
+    if (!group || group.includes('watch_time')) {
+      const user = await User.findById(userId).select('watch_time')
+      response.watch_time = user.watch_time
+    }
     //user earnings
     if (!group || group.includes('earnings')) {
-      const userVideos = await LongVideo.find({ creator: userId }).select(
-        'name views likes shares'
+      const user = await User.findById(userId)
+      const earnings = {}
+      earnings.creator_pass = user.creator_profile?.total_earned || 0
+      earnings.advertisement_earnings = user.advertisement_earnings
+      let communityEarnings = 0
+      const userCommunities = await Community.find({ founder: userId }).select(
+        'total_fee_collected'
       )
-
-      const totalViews = userVideos.reduce((sum, video) => sum + video.views, 0)
-      const totalLikes = userVideos.reduce((sum, video) => sum + video.likes, 0)
-      const totalShares = userVideos.reduce(
-        (sum, video) => sum + video.shares,
-        0
+      userCommunities.forEach((community) => {
+        communityEarnings += community.total_fee_collected
+      })
+      earnings.community_fee_earnings = communityEarnings
+      let giftingEarnings = 0
+      let videoPurchaseEarnings = 0
+      let seriesPurchaseEarnings = 0
+      const userComments = await Comment.find({ user: userId }).select('gifts')
+      const userVideos = await LongVideo.find({ created_by: userId }).select(
+        'gifts earned_till_date'
       )
-
-      const viewsEarnings = totalViews * 0.001
-      const engagementBonus = (totalLikes + totalShares) * 0.01
-      const totalEarnings = viewsEarnings + engagementBonus
-
-      const earnings = {
-        totalEarnings: parseFloat(totalEarnings.toFixed(2)),
-        viewsEarnings: parseFloat(viewsEarnings.toFixed(2)),
-        engagementBonus: parseFloat(engagementBonus.toFixed(2)),
-        totalViews,
-        totalLikes,
-        totalShares,
-        totalVideos: userVideos.length,
-      }
+      const userSeries = await Series.find({
+        created_by: userId,
+      }).select('total_earned')
+      userSeries.forEach((series) => {
+        seriesPurchaseEarnings += series.total_earned
+      })
+      userComments.forEach((comment) => {
+        giftingEarnings += comment.gifts
+      })
+      earnings.comment_gifting_earnings = giftingEarnings
+      giftingEarnings = 0
+      userVideos.forEach((video) => {
+        giftingEarnings += video.gifts
+        videoPurchaseEarnings += video.earned_till_date
+      })
+      earnings.video_gifting_earnings = giftingEarnings
+      earnings.video_purchase_earnings = videoPurchaseEarnings
+      earnings.series_purchase_earnings = seriesPurchaseEarnings
       response.earnings = earnings
     }
     //user history
@@ -1687,13 +1742,25 @@ const getUserPurchasedAccess = async (req, res, next) => {
       individualPurchases.map(async (purchase) => {
         let asset_data
         if (purchase.content_type === 'video') {
-          asset_data = await LongVideo.findById(purchase.content_id).select(
-            'name description thumbnailUrl'
-          )
+          asset_data = await LongVideo.findById(purchase.content_id)
+            .select('name description thumbnailUrl _id created_by')
+            .populate({
+              path: 'created_by',
+              select: 'username profile_photo _id',
+            })
         } else {
-          asset_data = await Series.findById(purchase.content_id).select(
-            'title description total_episodes bannerUrl posterUrl'
-          )
+          asset_data = await Series.findById(purchase.content_id)
+            .select(
+              'title description total_episodes bannerUrl posterUrl _id created_by episodes'
+            )
+            .populate({
+              path: 'created_by',
+              select: 'username profile_photo _id',
+            })
+            .populate({
+              path: 'episodes',
+              select: 'name description _id thumbnailUrl',
+            })
         }
 
         return {
@@ -1770,7 +1837,61 @@ const saveUserFCMToken = async (req, res, next) => {
   }
 }
 
+const GetStatusOfReshare=async(req,res,next)=>{
+  try {
+    const userId=req.user.id
+    const { videoId } = req.body
+    if (!videoId) {
+      return res.status(400).json({ message: 'Video ID is required' })
+    }
+    const reshare= await Reshare.findOne({
+      user: userId,
+      long_video: videoId,
+    })
+    if (!reshare) {
+      return res.status(404).json({ message: 'Reshare not found' })
+    }
+    const response={};
+    response.reshareStatus = reshare? true : false;
+    return res.status(200).json({
+      message: 'Reshare status retrieved successfully',
+      data: response,
+    })
+    
+  } catch (error) {
+   handleError(error, req, res, next)
+    
+  }
+}
+
+const AddVideoToUserViewHistory=async(req,res,next)=>{
+  try {
+    const userId=req.user.id
+    const { videoId } = req.body
+    if (!videoId) {
+      return res.status(400).json({ message: 'Video ID is required' })
+    }
+    const user = await User.findById(userId)
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+    // Check if video is already in history
+    if (user.viewed_videos.includes(videoId)) {
+      return res.status(200).json({ message: 'Video already in history' })
+    }
+    // Add video to viewed_videos
+    user.viewed_videos.push(videoId)
+    await user.save()
+    return res.status(200).json({
+      message: 'Video added to user view history successfully',
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
 module.exports = {
+
   getUserProfileDetails,
   GetUserFeed,
   GetUserProfile,
@@ -1796,4 +1917,6 @@ module.exports = {
   getUserPurchasedAccess,
   toggleCommentMonetization,
   saveUserFCMToken,
+  GetStatusOfReshare,
+  AddVideoToUserViewHistory,
 }
