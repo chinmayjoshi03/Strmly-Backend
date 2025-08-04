@@ -17,10 +17,6 @@ const {
   UpvoteReply,
   DownvoteReply,
   deleteComment,
-  statusOfUserFollowing,
-  statusOfReshare,
-  statusOfUserFollower,
-  GiftVideo,
 } = require('../controller/interaction.controller')
 const { authenticateToken } = require('../middleware/auth')
 const {
@@ -103,8 +99,8 @@ router.delete(
 // API to gift a comment
 router.post('/gift-comment', authenticateToken, paymentRateLimiter, GiftComment)
 
-// API to gift a video
-router.post('/gift-video', authenticateToken, paymentRateLimiter, GiftVideo)
+// API to gift a video - DISABLED: GiftVideo function not implemented
+// router.post('/gift-video', authenticateToken, paymentRateLimiter, GiftVideo)
 
 // API to reshare a video
 router.post('/reshare', authenticateToken, generalRateLimiter, reshareVideo)
@@ -118,29 +114,29 @@ router.post('/saved/status', authenticateToken, checkForSaveVideo)
 // get status of like video
 router.post('/like/status', authenticateToken, generalRateLimiter, statusOfLike)
 
-// get status of reshare video
-router.post(
-  '/reshare/status',
-  authenticateToken,
-  generalRateLimiter,
-  statusOfReshare
-)
+// get status of reshare video - DISABLED: statusOfReshare function not implemented
+// router.post(
+//   '/reshare/status',
+//   authenticateToken,
+//   generalRateLimiter,
+//   statusOfReshare
+// )
 
-// get status of user follower
-router.post(
-  '/follower/status',
-  authenticateToken,
-  generalRateLimiter,
-  statusOfUserFollower
-)
+// get status of user follower - DISABLED: statusOfUserFollower function not implemented
+// router.post(
+//   '/follower/status',
+//   authenticateToken,
+//   generalRateLimiter,
+//   statusOfUserFollower
+// )
 
-// get status of user following
-router.post(
-  '/following/status',
-  authenticateToken,
-  generalRateLimiter,
-  statusOfUserFollowing
-)
+// get status of user following - DISABLED: statusOfUserFollowing function not implemented
+// router.post(
+//   '/following/status',
+//   authenticateToken,
+//   generalRateLimiter,
+//   statusOfUserFollowing
+// )
 
 // Get total shares by video ID
 router.get(

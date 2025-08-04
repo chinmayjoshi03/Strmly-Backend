@@ -54,7 +54,8 @@ const dynamicVideoUpload = (req, res, next) => {
 }
 
 const validateVideoFormData = (req, res, next) => {
-  const videoFile = req.files?.videoFile?.[0]
+  // dynamicVideoUpload uses .single('videoFile') so file is in req.file, not req.files
+  const videoFile = req.file
   if (!videoFile) {
     console.error('Invalid or missing video file')
     return res.status(400).json({

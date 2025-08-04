@@ -4,7 +4,7 @@ const { handleError } = require('../utils/utils')
 
 const createSeries = async (req, res, next) => {
   try {
-    const userId = req.user.id.toString()
+    const userId = req.user.id
     const {
       title,
       description,
@@ -119,12 +119,40 @@ const getSeriesById = async (req, res, next) => {
 }
 
 const getUserSeries = async (req, res, next) => {
-  const userId = req.user.id.toString()
+  const userId = req.user.id
   if (!userId) {
     return res.status(400).json({ error: 'User ID is required' })
   }
+  
   try {
-    const series = await Series.find({ created_by: userId })
+    // Ensure userId is a valid ObjectId
+    const mongoose = require('mongoose')
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID format' })
+    }
+
+    console.log('🔍 Fetching series for user:', userId);
+    
+    // First get all series for debugging
+    const allSeries = await Series.find({ created_by: userId });
+    console.log('🔍 All series for user (before filtering):', allSeries.map(s => ({ 
+      id: s._id, 
+      title: s.title, 
+      visibility: s.visibility, 
+      hidden_reason: s.hidden_reason 
+    })));
+    
+    const series = await Series.find({ 
+      created_by: userId,
+      $and: [
+        {
+          $or: [
+            { visibility: { $exists: false } },
+            { visibility: { $ne: 'hidden' } }
+          ]
+        }
+      ]
+    })
       .populate('created_by', 'username email profile_photo')
       .populate('community', 'name profile_photo')
       .populate({
@@ -139,12 +167,18 @@ const getUserSeries = async (req, res, next) => {
           sort: { season_number: 1, episode_number: 1 },
         },
       })
+    
+    console.log('📊 Found series count:', series.length);
+    console.log('📊 Series visibility status:', series.map(s => ({ 
+      id: s._id, 
+      title: s.title, 
+      visibility: s.visibility, 
+      hidden_reason: s.hidden_reason 
+    })));
 
-    if (!series || series.length === 0) {
-      return res.status(404).json({ error: 'No series found for this user' })
-    }
+    // Return empty array instead of 404 when no series found
     res.status(200).json({
-      message: 'User series retrieved successfully',
+      message: series.length > 0 ? 'User series retrieved successfully' : 'No series found for this user',
       data: series,
     })
   } catch (error) {
@@ -155,7 +189,7 @@ const getUserSeries = async (req, res, next) => {
 const updateSeries = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user.id.toString()
+    const userId = req.user.id
     const {
       title,
       description,
@@ -257,10 +291,37 @@ const deleteSeries = async (req, res, next) => {
       }
     )
 
-    series.visibility = 'hidden'
-    series.hidden_reason = 'series_deleted'
-    series.hidden_at = new Date()
-    await series.save()
+    console.log('🗑️ Marking series as deleted:', id);
+    console.log('🗑️ Series before deletion:', { 
+      id: series._id, 
+      title: series.title, 
+      visibility: series.visibility 
+    });
+    
+    // Use findByIdAndUpdate for atomic operation
+    const updatedSeries = await Series.findByIdAndUpdate(
+      id,
+      {
+        visibility: 'hidden',
+        hidden_reason: 'series_deleted',
+        hidden_at: new Date()
+      },
+      { new: true }
+    );
+    
+    console.log('✅ Series marked as deleted:', { 
+      id: updatedSeries._id, 
+      visibility: updatedSeries.visibility, 
+      hidden_reason: updatedSeries.hidden_reason 
+    });
+
+    // Verify the deletion by fetching the series again
+    const verificationSeries = await Series.findById(id);
+    console.log('🔍 Verification - Series after deletion:', {
+      id: verificationSeries._id,
+      visibility: verificationSeries.visibility,
+      hidden_reason: verificationSeries.hidden_reason
+    });
 
     res.status(200).json({
       message: 'Series deleted successfully',
@@ -353,7 +414,7 @@ const addEpisodeToSeries = async (req, res, next) => {
 const removeEpisodeFromSeries = async (req, res, next) => {
   try {
     const { seriesId, episodeId } = req.params
-    const userId = req.user.id.toString()
+    const userId = req.user.id
 
     const series = await Series.findById(seriesId)
     if (

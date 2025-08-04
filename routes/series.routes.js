@@ -21,6 +21,9 @@ router.get('/search', searchSeries)
 // Route to get all series with pagination
 router.get('/all', getAllSeries)
 
+// Route to get all series created by a user (MUST be before /:id route)
+router.get('/user', authenticateToken, getUserSeries)
+
 // Route to get a series by ID
 router.get('/:id', getSeriesById)
 
@@ -39,8 +42,5 @@ router.delete(
   authenticateToken,
   removeEpisodeFromSeries
 )
-
-// Route to get all series created by a user
-router.get('/user', authenticateToken, getUserSeries)
 
 module.exports = router
