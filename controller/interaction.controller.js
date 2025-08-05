@@ -263,8 +263,12 @@ const CommentOnVideo = async (req, res, next) => {
     })
 
     await newComment.save()
-    video.comments.push(newComment._id)
-    await video.save()
+    
+    // Use updateOne to avoid triggering pre-save validation
+    await LongVideo.updateOne(
+      { _id: videoId },
+      { $push: { comments: newComment._id } }
+    )
 
     const userCommentType = 'commented_videos'
 
@@ -298,9 +302,12 @@ const CommentOnVideo = async (req, res, next) => {
       commentText,
       user.FCM_token
     )
+    // Get updated comment count
+    const updatedVideo = await LongVideo.findById(videoId).select('comments');
+    
     res.status(200).json({
       message: 'Comment added successfully',
-      comments: video.comments.length,
+      comments: updatedVideo.comments.length,
       comment: {
         _id: newComment._id,
         content: newComment.content,
