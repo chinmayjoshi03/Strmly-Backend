@@ -4,7 +4,7 @@ const { handleError } = require('../utils/utils')
 
 const createSeries = async (req, res, next) => {
   try {
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const {
       title,
       description,
@@ -119,7 +119,7 @@ const getSeriesById = async (req, res, next) => {
 }
 
 const getUserSeries = async (req, res, next) => {
-  const userId = req.user.id
+  const userId = req.user.id.toString()
   if (!userId) {
     return res.status(400).json({ error: 'User ID is required' })
   }
@@ -189,7 +189,7 @@ const getUserSeries = async (req, res, next) => {
 const updateSeries = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const {
       title,
       description,
@@ -334,7 +334,7 @@ const deleteSeries = async (req, res, next) => {
 const addEpisodeToSeries = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const { videoId, episodeNumber, seasonNumber = 1 } = req.body
 
     if (!videoId || !episodeNumber) {
@@ -414,7 +414,12 @@ const addEpisodeToSeries = async (req, res, next) => {
 const removeEpisodeFromSeries = async (req, res, next) => {
   try {
     const { seriesId, episodeId } = req.params
-    const userId = req.user.id
+    const userId = req.user.id.toString() // Convert to string for proper comparison
+
+    console.log('🔍 Episode deletion authorization check:');
+    console.log('  - User ID:', userId);
+    console.log('  - Series ID:', seriesId);
+    console.log('  - Episode ID:', episodeId);
 
     const series = await Series.findById(seriesId)
     if (
@@ -424,6 +429,9 @@ const removeEpisodeFromSeries = async (req, res, next) => {
     ) {
       return res.status(404).json({ error: 'Series not found' })
     }
+
+    console.log('  - Series creator ID:', series.created_by.toString());
+    console.log('  - Authorization match:', series.created_by.toString() === userId);
 
     if (series.created_by.toString() !== userId) {
       return res

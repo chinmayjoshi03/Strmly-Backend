@@ -799,7 +799,7 @@ const GetUserFollowing = async (req, res, next) => {
 
 const getUserProfileDetails = async (req, res, next) => {
   try {
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const redis = getRedisClient()
     const cacheKey = `user_profile:${userId}`
 
@@ -999,7 +999,7 @@ const GetUserVideosById = async (req, res, next) => {
 
 const SetCreatorPassPrice = async (req, res, next) => {
   try {
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const { price } = req.body
 
     await User.findByIdAndUpdate(userId, {
@@ -1017,7 +1017,7 @@ const SetCreatorPassPrice = async (req, res, next) => {
 
 const HasCreatorPass = async (req, res, next) => {
   try {
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const { creatorId } = req.params
 
     const access = await UserAccess.findOne({
@@ -1141,7 +1141,7 @@ const unfollowUser = async (req, res, next) => {
 
 const getUserHistory = async (req, res, next) => {
   try {
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const { page = 1, limit = 10 } = req.query
 
     // Try Redis cache first
@@ -1251,7 +1251,7 @@ const getUserHistory = async (req, res, next) => {
 
 const getUserLikedVideosInCommunity = async (req, res, next) => {
   try {
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const { communityId, page = 1, limit = 10 } = req.query
 
     // Validate required parameters
