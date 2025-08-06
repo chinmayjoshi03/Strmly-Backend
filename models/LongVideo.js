@@ -26,6 +26,10 @@ const longVideoSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    fingerprint: {
+      type: String,
+      default: '',
+    },
 
     comments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Comment' }],
     liked_by: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
@@ -91,6 +95,10 @@ const longVideoSchema = new mongoose.Schema(
       type: String,
       required: true,
       enum: ['Free', 'Paid'],
+    },
+    amount: {
+      type: Number,
+      default: 0,
     },
     Videolanguage: {
       type: String,
@@ -175,6 +183,11 @@ longVideoSchema.pre('save', function (next) {
     this.episode_number = null
     this.season_number = 1
   }
+
+  if (this.type === 'Paid' && this.amount <= 0) {
+    return next(new Error('Amount has to be greater than 0 for paid videos'))
+  }
+
   next()
 })
 

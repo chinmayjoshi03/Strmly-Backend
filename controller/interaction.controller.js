@@ -92,6 +92,103 @@ const statusOfLike = async (req, res, next) => {
   }
 }
 
+const statusOfReshare = async (req, res, next) => {
+  const { videoId } = req.body
+  const userId = req.user.id.toString()
+  if (!videoId) {
+    return res.status(400).json({ message: 'Video ID is required' })
+  }
+  try {
+    const video = await LongVideo.findById(videoId)
+
+    if (!video) {
+      return res.status(404).json({ message: 'Video not found' })
+    }
+    const reshares = await Reshare.find({ user: userId })
+      .populate({
+        path: 'long_video',
+        select: 'name description _id',
+      })
+      .populate({
+        path: 'user',
+        select: 'username profile_photo _id',
+      })
+    const isReshared = reshares.some(
+      (reshare) => reshare.long_video._id.toString() === videoId
+    )
+    reshares.res.status(200).json({
+      message: 'reshare status retrieved successfully',
+      isReshared,
+      video_reshares: reshares,
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const statusOfUserFollowing = async (req, res, next) => {
+  const { followingId } = req.body
+  const userId = req.user.id.toString()
+  if (!followingId) {
+    return res.status(400).json({ message: 'Following ID is required' })
+  }
+  try {
+    const followingUser = await User.findById(followingId).select('_id')
+
+    if (!followingUser) {
+      return res.status(404).json({ message: 'Following user not found' })
+    }
+
+    const user = await User.findById(userId).select('_id following').populate({
+      path: 'following',
+      select: 'username profile_photo _id',
+    })
+    const isFollowing = user.following.some(
+      (followingUser) => followingUser._id.toString() === followingId
+    )
+
+    res.status(200).json({
+      message: 'following status retrieved successfully',
+      isFollowing,
+      user_following: user.following,
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+const statusOfUserFollower = async (req, res, next) => {
+  const { followerId } = req.body
+  const userId = req.user.id.toString()
+
+  if (!followerId) {
+    return res.status(400).json({ message: 'Follower ID is required' })
+  }
+
+  try {
+    const followerUser = await User.findById(followerId).select('_id')
+    if (!followerUser) {
+      return res.status(404).json({ message: 'Follower user not found' })
+    }
+
+    const user = await User.findById(userId).select('_id followers').populate({
+      path: 'followers',
+      select: 'username profile_photo _id',
+    })
+
+    const isFollower = user.followers.some(
+      (follower) => follower._id.toString() === followerId
+    )
+
+    res.status(200).json({
+      message: 'Follower status retrieved successfully',
+      isFollower,
+      user_followers: user.followers,
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
 const LikeVideo = async (req, res, next) => {
   const { videoId } = req.body
   const userId = req.user.id.toString()
@@ -114,36 +211,59 @@ const LikeVideo = async (req, res, next) => {
 
     if (hasLiked) {
       // Unlike the video
-      video.liked_by.pull(userId)
-      video.likes = Math.max(0, video.likes - 1)
+      const updatedVideo = await LongVideo.findOneAndUpdate(
+        { _id: videoId },
+        [
+          {
+            $set: {
+              liked_by: { $setDifference: ['$liked_by', [userId]] },
+              likes: {
+                $cond: [
+                  { $gt: ['$likes', 0] },
+                  { $subtract: ['$likes', 1] },
+                  0,
+                ],
+              },
+            },
+          },
+        ],
+        { new: true }
+      )
 
-      if (Array.isArray(user.liked_videos)) {
-        user.liked_videos.pull(videoId)
-      }
-
-      await video.save()
-      await user.save()
-
+      await User.updateOne(
+        { _id: userId },
+        {
+          $pull: { liked_videos: videoId },
+        }
+      )
       res.status(200).json({
         message: 'Video unliked successfully',
-        likes: video.likes,
+        likes: updatedVideo.likes,
         isLiked: false,
       })
     } else {
       // Like the video
-      video.liked_by.push(userId)
-      video.likes += 1
+      const updatedVideo = await LongVideo.findOneAndUpdate(
+        { _id: videoId },
+        {
+          $addToSet: { liked_by: userId },
+          $inc: { likes: 1 },
+        },
+        { new: true }
+      )
 
-      if (!Array.isArray(user.liked_videos)) {
-        user.liked_videos = []
-      }
-      if (!user.liked_videos.includes(videoId)) {
-        user.liked_videos.push(videoId)
-      }
-      const videoCreator = video.created_by.toString()
-      const videoName = video.name
-      const userName = user.username
-      const userProfilePhoto = user.profile_photo
+      const updatedUser = await User.findOneAndUpdate(
+        { _id: userId },
+        {
+          $addToSet: { liked_videos: videoId },
+        },
+        { new: true }
+      )
+
+      const videoCreator = updatedVideo.created_by.toString()
+      const videoName = updatedVideo.name
+      const userName = updatedUser.username
+      const userProfilePhoto = updatedUser.profile_photo
       await addVideoLikeNotificationToQueue(
         videoCreator,
         userId,
@@ -151,14 +271,12 @@ const LikeVideo = async (req, res, next) => {
         userName,
         videoName,
         userProfilePhoto,
-        user.FCM_token
+        updatedUser.FCM_token
       )
-      await video.save()
-      await user.save()
 
       res.status(200).json({
         message: 'Video liked successfully',
-        likes: video.likes,
+        likes: updatedVideo.likes,
         isLiked: true,
       })
     }
@@ -169,7 +287,7 @@ const LikeVideo = async (req, res, next) => {
 
 const ShareVideo = async (req, res, next) => {
   const { videoId } = req.body
-  const userId = req.user.id
+  const userId = req.user.id.toString()
 
   if (!videoId) {
     return res
@@ -178,24 +296,24 @@ const ShareVideo = async (req, res, next) => {
   }
 
   try {
-    const video = await LongVideo.findById(videoId)
+    let video = await LongVideo.findById(videoId)
 
     if (!video) {
       return res.status(404).json({ message: 'Video not found' })
     }
+    video = await LongVideo.findOneAndUpdate(
+      { _id: videoId },
+      { $inc: { shares: 1 } },
+      { new: true }
+    )
 
-    video.shares += 1
-    await video.save()
-
-    const user = await User.findById(userId)
-    // Fix: Use shared_videos instead of sharedVideos
-    if (!Array.isArray(user.shared_videos)) {
-      user.shared_videos = []
-    }
-    if (!user.shared_videos.includes(videoId)) {
-      user.shared_videos.push(videoId)
-      await user.save()
-    }
+    await User.findOneAndUpdate(
+      { _id: userId },
+      {
+        $addToSet: { shared_videos: videoId },
+      },
+      { new: true }
+    )
 
     res.status(200).json({
       message: 'Video shared successfully',
@@ -249,7 +367,7 @@ const CommentOnVideo = async (req, res, next) => {
   }
 
   try {
-    const video = await LongVideo.findById(videoId)
+    let video = await LongVideo.findById(videoId)
 
     if (!video) {
       return res.status(404).json({ message: 'Video not found' })
@@ -263,11 +381,10 @@ const CommentOnVideo = async (req, res, next) => {
     })
 
     await newComment.save()
-    
-    // Use updateOne to avoid triggering pre-save validation
-    await LongVideo.updateOne(
+    video = await LongVideo.findOneAndUpdate(
       { _id: videoId },
-      { $push: { comments: newComment._id } }
+      { $push: { comments: newComment._id } },
+      { new: true }
     )
 
     const userCommentType = 'commented_videos'
@@ -334,7 +451,7 @@ const CommentOnVideo = async (req, res, next) => {
 
 const getVideoComments = async (req, res, next) => {
   try {
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const { videoId } = req.params
 
     if (!videoId) {
@@ -500,29 +617,15 @@ const getCommentReplies = async (req, res, next) => {
 const upvoteComment = async (req, res, next) => {
   try {
     const { videoId, commentId } = req.body
-    const userId = req.user.id
+    const userId = req.user.id.toString()
 
-    console.log('🔍 Upvote request:', { videoId, commentId, userId });
-
-    // Validate required fields
-    if (!videoId || !commentId) {
-      console.log('❌ Missing required fields:', { videoId, commentId });
-      return res.status(400).json({ error: 'Video ID and Comment ID are required' })
-    }
-
-    const video = await LongVideo.findById(videoId)
-    const user = await User.findById(userId).select(
-      'username profile_photo FCM_token'
-    )
-    
+    let video = await LongVideo.findById(videoId)
+    const user = await User.findById(userId).select('username profile_photo')
     if (!video) {
       console.log('❌ Video not found:', videoId);
       return res.status(404).json({ error: 'Video not found' })
     }
 
-    console.log('📹 Video found:', video.name);
-
-    // Find the comment by ID (since comments are now ObjectId references)
     const comment = await Comment.findById(commentId)
     if (!comment) {
       console.log('❌ Comment not found:', commentId);
@@ -564,8 +667,6 @@ const upvoteComment = async (req, res, next) => {
     }
 
     await comment.save()
-    console.log('✅ Comment saved with new vote count:', comment.upvotes);
-    
     if (!alreadyUpvoted) {
       //add upvote notification to queue
       const commentcreator = comment.user.toString()
@@ -600,12 +701,7 @@ const upvoteComment = async (req, res, next) => {
 const downvoteComment = async (req, res, next) => {
   try {
     const { videoId, commentId } = req.body
-    const userId = req.user.id
-
-    // Validate required fields
-    if (!videoId || !commentId) {
-      return res.status(400).json({ error: 'Video ID and Comment ID are required' })
-    }
+    const userId = req.user.id.toString()
 
     const video = await LongVideo.findById(videoId)
 
@@ -613,7 +709,6 @@ const downvoteComment = async (req, res, next) => {
       return res.status(404).json({ error: 'Video not found' })
     }
 
-    // Find the comment by ID (since comments are now ObjectId references)
     const comment = await Comment.findById(commentId)
     if (!comment) {
       return res.status(404).json({ error: 'Comment not found' })
@@ -975,19 +1070,302 @@ const GiftComment = async (req, res, next) => {
   }
 }
 
+const GiftVideo = async (req, res, next) => {
+  try {
+    const { videoId, amount } = req.body
+    const gifterId = req.user.id.toString()
+
+    // Validation
+    if (!videoId || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Video ID and amount are required',
+        code: 'MISSING_REQUIRED_FIELDS',
+      })
+    }
+
+    const videoValidation = validateObjectId(videoId, 'Video ID')
+    if (!videoValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: videoValidation.error,
+        code: 'INVALID_VIDEO_ID',
+      })
+    }
+
+    const amountValidation = validateAmount(amount)
+    if (!amountValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: amountValidation.error,
+        code: 'INVALID_AMOUNT',
+      })
+    }
+
+    const video = await LongVideo.findById(videoId)
+
+    if (!video) {
+      return res.status(404).json({
+        success: false,
+        error: 'Video not found',
+        code: 'VIDEO_NOT_FOUND',
+      })
+    }
+
+    if (!video.is_monetized) {
+      return res.status(404).json({
+        success: false,
+        error: 'Video not monetized',
+        code: 'Video_NOT_MONETIZED',
+      })
+    }
+
+    const videoCreatorId = video.created_by.toString()
+
+    // Check if user is trying to gift themselves
+    if (videoCreatorId === gifterId) {
+      return res.status(400).json({
+        success: false,
+        error: 'You cannot gift yourself',
+        code: 'CANNOT_GIFT_SELF',
+      })
+    }
+
+    // Get wallets
+    const gifterWallet = await Wallet.find({ user_id: gifterId })
+    if (!gifterWallet) {
+      return res.status(400).json({
+        success: false,
+        error: 'gifter wallet not found',
+        code: 'GIFTER_WALLET_NOT_FOUND',
+      })
+    }
+    const receiverWallet = await Wallet.find({ user_id: videoCreatorId })
+    if (!receiverWallet) {
+      return res.status(400).json({
+        success: false,
+        error: 'receiver wallet not found',
+        code: 'RECEIVER_WALLET_NOT_FOUND',
+      })
+    }
+    // Check gifter's wallet balance
+    if (gifterWallet.balance < amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient wallet balance',
+        currentBalance: gifterWallet.balance,
+        requiredAmount: amount,
+        shortfall: amount - gifterWallet.balance,
+        code: 'INSUFFICIENT_BALANCE',
+      })
+    }
+
+    // Check wallet statuses
+    if (gifterWallet.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        error: 'Your wallet is not active',
+        code: 'WALLET_INACTIVE',
+      })
+    }
+
+    if (receiverWallet.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        error: "Receiver's wallet is not active",
+        code: 'RECEIVER_WALLET_INACTIVE',
+      })
+    }
+
+    // Get user details
+    const receiver = await User.findById(videoCreatorId).select('username')
+    if (!receiver) {
+      return res.status(404).json({
+        success: false,
+        error: 'Video creator not found',
+        code: 'VIDEO_VIDEO_NOT_FOUND',
+      })
+    }
+
+    const session = await mongoose.startSession()
+
+    const gifterBalanceBefore = gifterWallet.balance
+    const receiverBalanceBefore = receiverWallet.balance
+    let walletTransfer
+
+    try {
+      await session.withTransaction(async () => {
+        const gifterBalanceAfter = gifterBalanceBefore - amount
+        const receiverBalanceAfter = receiverBalanceBefore + amount
+
+        walletTransfer = new WalletTransfer({
+          sender_id: gifterId,
+          receiver_id: videoCreatorId,
+          sender_wallet_id: gifterWallet._id,
+          receiver_wallet_id: receiverWallet._id,
+          total_amount: amount,
+          creator_amount: amount,
+          platform_amount: 0,
+          currency: 'INR',
+          transfer_type: 'video_gift',
+          content_id: videoId,
+          content_type: 'LongVideo',
+          description: `Gift for video: "${video.name.substring(0, 30)}..."`,
+          sender_balance_before: gifterBalanceBefore,
+          sender_balance_after: gifterBalanceAfter,
+          receiver_balance_before: receiverBalanceBefore,
+          receiver_balance_after: receiverBalanceAfter,
+          platform_fee_percentage: 0,
+          creator_share_percentage: 100,
+          status: 'completed',
+          metadata: {
+            video_title: video.name,
+            creator_name: receiver.username,
+            transfer_note: 'video gift',
+            video_id: videoId,
+          },
+        })
+
+        await walletTransfer.save({ session })
+
+        // Update wallets
+        gifterWallet.balance = gifterBalanceAfter
+        gifterWallet.total_spent += amount
+        gifterWallet.last_transaction_at = new Date()
+        await gifterWallet.save({ session })
+
+        receiverWallet.balance = receiverBalanceAfter
+        receiverWallet.total_received += amount
+        receiverWallet.revenue += amount
+        receiverWallet.last_transaction_at = new Date()
+        await receiverWallet.save({ session })
+
+        // Create gifter transaction
+        const gifterTransaction = new WalletTransaction({
+          wallet_id: gifterWallet._id,
+          user_id: gifterId,
+          transaction_type: 'debit',
+          transaction_category: 'video_gift',
+          amount: amount,
+          currency: 'INR',
+          description: `Gift sent to ${receiver.username} for video "${video.name.substring(0, 30)}..."`,
+          balance_before: gifterBalanceBefore,
+          balance_after: gifterBalanceAfter,
+          content_id: videoId,
+          content_type: 'LongVideo',
+          status: 'completed',
+          metadata: {
+            video_title: video.name,
+            creator_name: receiver.username,
+            video_id: videoId,
+            transfer_id: walletTransfer._id,
+          },
+        })
+
+        await gifterTransaction.save({ session })
+
+        // Create receiver transaction
+        const receiverTransaction = new WalletTransaction({
+          wallet_id: receiverWallet._id,
+          user_id: videoCreatorId,
+          transaction_type: 'credit',
+          transaction_category: 'gift_received',
+          amount: amount,
+          currency: 'INR',
+          description: `Gift received from ${req.user.username} for your video "${video.name.substring(0, 30)}..."`,
+          balance_before: receiverBalanceBefore,
+          balance_after: receiverBalanceAfter,
+          content_id: videoId,
+          content_type: 'LongVideo',
+          status: 'completed',
+          metadata: {
+            video_title: video.name,
+            creator_name: req.user.username,
+
+            video_id: videoId,
+            transfer_id: walletTransfer._id,
+          },
+        })
+
+        await receiverTransaction.save({ session })
+        //update video analytics
+        await LongVideo.updateOne(
+          { _id: videoId },
+          {
+            $inc: { gifts: amount },
+            $push: { gifted_by: gifterId },
+          },
+          { session }
+        )
+      })
+
+      await session.endSession()
+      //send comment gift notification
+      const gifter = User.findById(gifterId).select('username profile_photo')
+      await addVideoGiftNotificationToQueue(
+        videoCreatorId,
+        gifterId,
+        videoId,
+        gifter.username,
+        video.name,
+        gifter.profile_photo,
+        amount
+      )
+      res.status(200).json({
+        success: true,
+        message: 'Gift sent successfully!',
+        gift: {
+          amount: amount,
+          from: req.user.username,
+          to: receiver.username,
+          videoTitle: video.name,
+
+          giftNote: 'video gift',
+          transferType: 'comment_gift',
+        },
+        gifter: {
+          balanceBefore: gifterBalanceBefore,
+          balanceAfter: gifterWallet.balance,
+          currentBalance: gifterWallet.balance,
+        },
+        receiver: {
+          balanceBefore: receiverBalanceBefore,
+          balanceAfter: receiverWallet.balance,
+          currentBalance: receiverWallet.balance,
+          receivedAmount: amount,
+        },
+        transfer: {
+          id: walletTransfer._id,
+          createdAt: new Date(),
+        },
+      })
+    } catch (transactionError) {
+      await session.abortTransaction()
+      throw transactionError
+    } finally {
+      if (session.inTransaction()) {
+        await session.endSession()
+      }
+    }
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
 const reshareVideo = async (req, res, next) => {
   const { videoId } = req.body
   const userId = req.user.id.toString()
+
   try {
     if (!videoId) {
       return res.status(400).json({ message: 'Video ID is required' })
     }
-    const user = await User.findById(userId)
+
+    const user = await User.findById(userId).select('username profile_photo')
     if (!user) {
       return res.status(404).json({ message: 'User not found' })
     }
 
-    const video = await LongVideo.findById(videoId).select('name created_by')
+    const video = await LongVideo.findById(videoId)
     if (!video) {
       return res.status(404).json({ message: 'Video not found' })
     }
@@ -995,15 +1373,36 @@ const reshareVideo = async (req, res, next) => {
       user: userId,
       long_video: videoId,
     })
+
     if (existingReshare) {
       await Reshare.deleteOne({ _id: existingReshare._id })
+      await LongVideo.updateOne(
+        { _id: videoId, shares: { $gt: 0 } },
+        { $inc: { shares: -1 } }
+      )
+
+      const totalReshares = await Reshare.countDocuments({
+        long_video: videoId,
+      })
+
       return res.status(200).json({
         message: `video:${videoId} un-reshared by user:${userId} successfully`,
+        totalReshares,
       })
     }
 
     await Reshare.create({ user: userId, long_video: videoId })
-    // send video reshare notification
+
+    const totalReshares = await Reshare.countDocuments({ long_video: videoId })
+    await LongVideo.updateOne({ _id: videoId }, { $inc: { shares: 1 } })
+
+    // Fetch FCM token of the creator
+    const videoCreator = await User.findById(video.created_by).select(
+      'FCM_token'
+    )
+    const fcmToken = videoCreator?.FCM_token || null
+
+    // Queue reshare notification
     await addVideoReshareNotificationToQueue(
       video.created_by.toString(),
       userId,
@@ -1011,10 +1410,12 @@ const reshareVideo = async (req, res, next) => {
       user.username,
       video.name,
       user.profile_photo,
-      user.FCM_token
+      fcmToken
     )
+
     return res.status(200).json({
       message: `video:${videoId} reshared by user:${userId} successfully`,
+      totalReshares,
     })
   } catch (error) {
     handleError(error, req, res, next)
@@ -1024,7 +1425,7 @@ const reshareVideo = async (req, res, next) => {
 const saveVideo = async (req, res, next) => {
   try {
     const { videoId, videoType, seriesId } = req.body
-    const userId = req.user.id
+    const userId = req.user.id.toString()
 
     if (!videoId || !videoType) {
       return res
@@ -1089,7 +1490,7 @@ const saveVideo = async (req, res, next) => {
 
 const checkForSaveVideo = async (req, res, next) => {
   const { videoId, videoType, seriesId } = req.body
-  const userId = req.user.id
+  const userId = req.user.id.toString()
   if (!videoId || !videoType || !seriesId) {
     return res
       .status(400)
@@ -1278,7 +1679,7 @@ const DownvoteReply = async (req, res, next) => {
 
 const UnsaveVideo = async (req, res, next) => {
   const { videoId, videoType, seriesId } = req.body
-  const userId = req.user.id
+  const userId = req.user.id.toString()
 
   if (!videoId || !videoType || !seriesId) {
     return res
@@ -1386,9 +1787,12 @@ const deleteComment = async (req, res, next) => {
     //delete comment/reply
     await Comment.deleteOne({ _id: commentId })
     //delete it from video's list of comments
-    video.comments = video.comments.filter(
-      (comment) => comment.toString() !== commentId
+    await LongVideo.findOneAndUpdate(
+      { _id: videoId },
+      { $pull: { comments: commentId } },
+      { new: true }
     )
+
     //if reply:delete it from comment's list of replies
     const parentCommentId = comment.parent_comment.toString()
     if (parentCommentId) {
@@ -1400,7 +1804,6 @@ const deleteComment = async (req, res, next) => {
         await parentComment.save()
       }
     }
-    await video.save()
     return res
       .status(200)
       .json({ message: 'Comment deleted successfully', commentId })

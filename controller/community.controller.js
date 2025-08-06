@@ -938,6 +938,23 @@ const handleFounderLeaving = async (communityId, currentFounderId) => {
   return nextFounderId
 }
 
+const getCommunityFollowingStatus = async (req, res, next) => {
+  try {
+    const userId = req.user.id.toString()
+    const id = req.params
+    const community = await Community.findById(id).select('followers')
+    const status = community.followers.some(
+      (follower) => follower.toString() === userId
+    )
+    res.status(200).json({
+      message: 'community following status retrieved successfully',
+      status,
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
 module.exports = {
   getCommunityProfileDetails,
   getAllCommunities,
@@ -958,4 +975,5 @@ module.exports = {
   changeCommunityFounder,
   makeFirstJoinedCreatorFounder,
   handleFounderLeaving,
+  getCommunityFollowingStatus,
 }

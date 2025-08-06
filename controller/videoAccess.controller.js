@@ -342,6 +342,14 @@ const purchaseIndividualVideo = async (req, res, next) => {
       })
     }
 
+    if (amount < video.amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Amount not valid',
+        code: 'AMOUNT_NOT_VALID',
+      })
+    }
+
     // Process payment
     const buyerWallet = await Wallet.findOne({ user_id: buyerId })
     const creatorWallet = await Wallet.findOne({ user_id: creatorId })
@@ -445,6 +453,14 @@ const purchaseIndividualVideo = async (req, res, next) => {
 
         await buyerTransaction.save({ session })
         await creatorTransaction.save({ session })
+        video = await LongVideo.findOneAndUpdate(
+          { _id: id },
+          { $inc: { earned_till_date: amount } },
+          {
+            new: true,
+            session: session,
+          }
+        )
       })
 
       await session.endSession()

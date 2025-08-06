@@ -9,11 +9,12 @@ const {
 } = require('../utils/utils')
 const { checkCommunityUploadPermission } = require('./community.controller')
 const LongVideo = require('../models/LongVideo')
-const Series = require('../models/Series')
+const Reshare = require('../models/Reshare')
+const addVideoToQueue = require('../utils/video_fingerprint_queue')
 const path = require('path')
 const os = require('os')
 const videoCompressor = require('../utils/video_compressor')
-const generateVideoABSSegments = require('../utils/ABS')
+const { generateVideoABSSegments } = require('../utils/ABS')
 const fs = require('fs')
 
 const uploadVideoToCommunity = async (req, res, next) => {
@@ -21,7 +22,7 @@ const uploadVideoToCommunity = async (req, res, next) => {
     const { communityId, videoId } = req.body
     const userId = req.user.id
     const video = await LongVideo.findById(videoId).select(
-      'visibility video_deleted'
+      'visibility hidden_reason community'
     )
     if (
       !video ||
@@ -40,6 +41,17 @@ const uploadVideoToCommunity = async (req, res, next) => {
         communityName: hasPermission.communityName,
       })
     }
+    if (video.community) {
+      if (video.community.toString() === communityId) {
+        return res
+          .status(400)
+          .json({ error: 'Video already uploaded in the Community' })
+      } else {
+        return res
+          .status(404)
+          .json({ error: 'Video is uploaded in another community' })
+      }
+    }
     const updatedCommunity = await Community.findByIdAndUpdate(
       communityId,
       {
@@ -52,7 +64,11 @@ const uploadVideoToCommunity = async (req, res, next) => {
     if (!updatedCommunity) {
       return res.status(404).json({ error: 'Community not found' })
     }
-
+    await LongVideo.findByIdAndUpdate(
+      videoId,
+      { $set: { community: communityId } },
+      { new: true }
+    )
     res.status(200).json({
       message: 'Video added to community successfully',
       community: {
@@ -82,6 +98,8 @@ const uploadVideo = async (req, res, next) => {
       start_time,
       display_till_time,
       is_standalone,
+      episodeNumber,
+      amount,
     } = req.body
 
     console.log('📤 Video upload request received:')
@@ -102,6 +120,24 @@ const uploadVideo = async (req, res, next) => {
     if (!is_standalone) {
       console.error('is_standalone field not found')
       return res.status(400).json({ error: 'is_standalone field required' })
+    }
+
+    if (is_standalone === 'false' && (!episodeNumber || !seriesId)) {
+      console.error(
+        'episodeNumber and seriesId required for non-standalone videos'
+      )
+      return res.status(400).json({
+        error: 'episodeNumber and seriesId required for non-standalone videos',
+      })
+    }
+    if ((type === 'Paid') & (!amount || amount <= 0)) {
+      console.error(
+        'Amount has to be included and should be greater than 0 for paid videos'
+      )
+      return res.status(400).json({
+        error:
+          'Amount has to be included and should be greater than 0 for paid videos',
+      })
     }
 
     // Check upload permission using the proper function
@@ -178,6 +214,7 @@ const uploadVideo = async (req, res, next) => {
       genre: genre || 'Action',
       type: type || 'Free',
       series: seriesId || null,
+      episode_number: episodeNumber || null,
       age_restriction:
         age_restriction === 'true' || age_restriction === true || false,
       Videolanguage: language || 'English',
@@ -185,6 +222,7 @@ const uploadVideo = async (req, res, next) => {
       display_till_time: display_till_time ? Number(display_till_time) : 0,
       subtitles: [],
       is_standalone: is_standalone === 'true',
+      is_monetized: user.video_monetization_enabled,
     }
     let savedVideo = new LongVideo(longVideo)
 
@@ -238,6 +276,7 @@ const uploadVideo = async (req, res, next) => {
       }
     }
 
+    await addVideoToQueue(savedVideo._id, videoUploadResult.url)
     res.status(200).json({
       message: 'Video uploaded successfully',
 
@@ -570,8 +609,12 @@ const createVideoABSSegments = async (req, res, next) => {
     const videoFile = await getFileFromS3Url(videoUrl)
 
     const videoSegmentUrls = await generateVideoABSSegments(videoFile, videoId)
-    video.videoResolutions = videoSegmentUrls
-    await video.save()
+    await LongVideo.findOneAndUpdate(
+      { _id: videoId },
+      { $set: { videoResolutions: videoSegmentUrls } },
+      { new: true }
+    )
+
     res.status(200).json({
       message: 'Segments created successfully',
       segments: videoSegmentUrls,
@@ -667,7 +710,14 @@ const getVideoById = async (req, res, next) => {
     let video = await LongVideo.findById(id)
       .populate('created_by', 'username email')
       .populate('community', 'name')
-      .populate('series', 'title')
+      .populate({
+        path: 'series',
+        populate: {
+          path: 'episodes',
+          select: 'name episode_number season_number thumbnailUrl views likes',
+          options: { sort: { season_number: 1, episode_number: 1 } },
+        },
+      })
 
     if (!video) {
       return res.status(404).json({ error: 'Video not found' })
@@ -760,10 +810,17 @@ const deleteVideo = async (req, res, next) => {
         .json({ error: 'Not authorized to delete this video' })
     }
     //unpublish video
-    video.visibility = 'hidden'
-    video.hidden_reason = 'video_deleted'
-    video.hidden_at = new Date()
-    await video.save()
+    await LongVideo.findOneAndUpdate(
+      { _id: id },
+      {
+        $set: {
+          visibility: 'hidden',
+          hidden_reason: 'video_deleted',
+          hidden_at: new Date(),
+        },
+      },
+      { new: true }
+    )
 
     res.status(200).json({
       message: 'Video deleted successfully',
@@ -775,12 +832,21 @@ const deleteVideo = async (req, res, next) => {
 
 const getTrendingVideos = async (req, res, next) => {
   try {
+    const userId = req.user.id.toString()
     const { page = 1, limit = 10 } = req.query
     const skip = (page - 1) * limit
 
+    const user = await User.findById(userId).select('following')
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+
+    const followingIds = (user.following || []).map((id) => id.toString())
+
     let videos = await LongVideo.find({})
       .populate('created_by', 'username email profile_photo')
-      .populate('community', 'name profile_photo')
+      .populate('community', 'name profile_photo followers')
       .populate(
         'series',
         'title description total_episodes bannerUrl posterUrl _id created_by episodes'
@@ -788,7 +854,34 @@ const getTrendingVideos = async (req, res, next) => {
       .sort({ views: -1, likes: -1, createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-
+    const userReshares = await Reshare.find({ user: userId }).select(
+      'long_video'
+    )
+    videos = videos.map((video) => {
+      video = video.toObject()
+      const community = video.community
+      if (community && community.followers) {
+        const isFollowing = community.followers.some(
+          (followerId) => followerId.toString() === userId
+        )
+        video.community = {
+          ...community,
+          is_following_community: isFollowing,
+        }
+      }
+      video.is_reshared = userReshares.some(
+        (reshare) => reshare.long_video.toString() === video._id.toString()
+      )
+      if (
+        video.created_by &&
+        followingIds.includes(video.created_by._id.toString())
+      ) {
+        video.is_following_creator = true
+      } else {
+        video.is_following_creator = false
+      }
+      return video
+    })
     let total = await LongVideo.countDocuments()
 
     res.status(200).json({
