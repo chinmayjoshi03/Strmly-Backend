@@ -806,7 +806,7 @@ const UpdateUserInterests = async (req, res, next) => {
 
 const GetUserFollowers = async (req, res, next) => {
   try {
-    const userId = req.params.id || req.user._id
+    const userId = req.params.id || req.user.id
     const user = await User.findById(userId).populate(
       'followers',
       'username profile_photo followers'
@@ -834,7 +834,7 @@ const GetUserFollowers = async (req, res, next) => {
 
 const GetUserFollowing = async (req, res, next) => {
   try {
-    const userId = req.params.id || req.user._id
+    const userId = req.params.id || req.user.id
     const user = await User.findById(userId).populate(
       'following',
       'username profile_photo'
@@ -928,9 +928,12 @@ const GetUserProfileById = async (req, res, next) => {
         })
       }
     }
-    const userDetails = await User.findById(userId).select(
-      'username profile_photo followers following my_communities social_media_links'
-    )
+    const userDetails = await User.findById(userId)
+      .populate('followers', 'username profile_photo')
+      .populate('following', 'username profile_photo')
+      .populate('my_communities', 'name profile_photo')
+      .populate('community', 'name profile_photo')
+      .populate('following_communities', 'name profile_photo')
 
     if (!userDetails) {
       return res.status(404).json({ message: 'User not found' })
@@ -938,19 +941,50 @@ const GetUserProfileById = async (req, res, next) => {
 
     const totalFollowers = userDetails.followers?.length || 0
     const totalFollowing = userDetails.following?.length || 0
-    const totalCommunities = userDetails.my_communities?.length || 0
-    const isBeingFollowed = userDetails.followers?.includes(userid) || false
+    const totalUserCreatedCommunities = userDetails.my_communities?.length || 0
+    const totalJoinedCommunities = userDetails.community?.length || 0
+    const totalFollowingCommunities =
+      userDetails.following_communities?.length || 0
+    const isBeingFollowed =
+      userDetails.followers?.some(
+        (follower) => follower._id.toString() === userid.toString()
+      ) || false
+    const isFollowing =
+      userDetails.following?.some(
+        (following) => following._id.toString() === userid.toString()
+      ) || false
 
+    const videos = await LongVideo.find({ created_by: userId })
+    const myLikedVideos =
+      videos?.filter(
+        (video) =>
+          video.liked_by?.some(
+            (liked_user) => liked_user._id.toString() === userid.toString()
+          ) || false
+      ) || []
+    const myFollowingCommunities =
+      userDetails.my_communities?.filter(
+        (community) =>
+          community.followers?.some(
+            (follower) => follower._id.toString() === userid.toString()
+          ) || false
+      ) || []
+      // creator pass details
+      const creatorPriceDetails=userDetails.creator_profile.creator_pass_price||0
     const result = {
       message: 'User profile details retrieved successfully',
       user: {
-        username: userDetails.username,
-        profile_photo: userDetails.profile_photo,
+        userDetails,
         totalFollowers,
         totalFollowing,
-        totalCommunities,
+        totalUserCreatedCommunities,
+        totalFollowingCommunities,
+        totalJoinedCommunities,
         isBeingFollowed,
-        social_media_links: userDetails.social_media_links || {},
+        isFollowing,
+        myLikedVideos,
+        myFollowingCommunities,
+        creatorPriceDetails,
       },
       cached: false,
     }
@@ -1431,7 +1465,7 @@ const getUserLikedVideosInCommunity = async (req, res, next) => {
 
 const updateSocialMediaLinks = async (req, res, next) => {
   try {
-    const userId = req.user._id
+    const userId = req.user.id
     const { facebook, twitter, instagram, youtube, snapchat } = req.body
 
     // Validate URLs if provided
@@ -1503,7 +1537,7 @@ const updateSocialMediaLinks = async (req, res, next) => {
 }
 
 const getUserDashboardAnalytics = async (req, res, next) => {
-  const userId = req.user._id.toString()
+  const userId = req.user.id.toString()
   const group = req.query.group
   const response = {}
 
@@ -1785,7 +1819,7 @@ const getUserDashboardAnalytics = async (req, res, next) => {
 
 const getUserPurchasedAccess = async (req, res, next) => {
   try {
-    const userId = req.user._id.toString()
+    const userId = req.user.id.toString()
     const response = {}
 
     const individualPurchases = await UserAccess.find({

@@ -608,7 +608,10 @@ const createVideoABSSegments = async (req, res, next) => {
 
     const video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Video not found' })
     }
     const videoUrl = video.videoUrl
@@ -640,7 +643,10 @@ const getVideoABSSegments = async (req, res, next) => {
     }
 
     const video = await LongVideo.findById(videoId).select('videoResolutions')
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Video not found' })
     }
     res.status(200).json({
@@ -725,7 +731,10 @@ const getVideoById = async (req, res, next) => {
         },
       })
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Video not found' })
     }
 
@@ -771,7 +780,10 @@ const updateVideo = async (req, res, next) => {
       updateData.display_till_time = Number(display_till_time)
 
     let video = await LongVideo.findById(id)
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Long video not found' })
     }
 
@@ -886,6 +898,8 @@ const getTrendingVideos = async (req, res, next) => {
       } else {
         video.is_following_creator = false
       }
+      video.start_time = video.start_time || 0
+      video.display_till_time = video.display_till_time || 0
       return video
     })
     let total = await LongVideo.countDocuments()
@@ -949,7 +963,10 @@ const incrementVideoView = async (req, res, next) => {
       { new: true }
     )
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Video not found' })
     }
 
@@ -968,7 +985,10 @@ const getRelatedVideos = async (req, res, next) => {
 
     let video = await LongVideo.findById(id)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Video not found' })
     }
 

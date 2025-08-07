@@ -58,6 +58,10 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
           )
           video.is_following_community = isFollowing
         }
+        if(video.start_time && video.display_till_time){
+          video.start_time = video.start_time
+          video.display_till_time = video.display_till_time
+        }
       })
 
       recommendedVideos.push(...interestedVideos)
@@ -112,6 +116,10 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
           )
           video.is_following_community = isFollowing
         }
+         if(video.start_time && video.display_till_time){
+          video.start_time = video.start_time
+          video.display_till_time = video.display_till_time
+        }
       })
       recommendedVideos.push(...randomVideos)
     }
@@ -146,6 +154,10 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
           (followerId) => followerId.toString() === userId
         )
         reshare.long_video.is_following_community = isFollowing
+      }
+      if(reshare.long_video.start_time && reshare.long_video.display_till_time){
+        reshare.long_video.start_time = reshare.long_video.start_time
+        reshare.long_video.display_till_time = reshare.long_video.display_till_time
       }
     })
 
@@ -261,7 +273,10 @@ const markVideoAsViewed = async (req, res, next) => {
 
     // Check if video exists
     const video = await LongVideo.findById(videoId)
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
 

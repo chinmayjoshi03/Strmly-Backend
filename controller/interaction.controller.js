@@ -76,7 +76,10 @@ const statusOfLike = async (req, res, next) => {
   try {
     const video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
 
@@ -101,7 +104,10 @@ const statusOfReshare = async (req, res, next) => {
   try {
     const video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
     const reshares = await Reshare.find({ user: userId })
@@ -116,7 +122,7 @@ const statusOfReshare = async (req, res, next) => {
     const isReshared = reshares.some(
       (reshare) => reshare.long_video._id.toString() === videoId
     )
-    reshares.res.status(200).json({
+    res.status(200).json({
       message: 'reshare status retrieved successfully',
       isReshared,
       video_reshares: reshares,
@@ -202,7 +208,10 @@ const LikeVideo = async (req, res, next) => {
   try {
     const video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
 
@@ -298,7 +307,10 @@ const ShareVideo = async (req, res, next) => {
   try {
     let video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
     video = await LongVideo.findOneAndUpdate(
@@ -337,7 +349,10 @@ const getTotalSharesByVideoId = async (req, res, next) => {
 
   try {
     const video = await LongVideo.findById(videoId)
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({
         success: false,
         error: 'Video not found',
@@ -369,7 +384,10 @@ const CommentOnVideo = async (req, res, next) => {
   try {
     let video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
 
@@ -473,7 +491,10 @@ const getVideoComments = async (req, res, next) => {
       })
       .populate('created_by', 'username profile_photo')
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({
         success: false,
         error: 'Video not found',
@@ -621,8 +642,10 @@ const upvoteComment = async (req, res, next) => {
 
     let video = await LongVideo.findById(videoId)
     const user = await User.findById(userId).select('username profile_photo')
-    if (!video) {
-      console.log('❌ Video not found:', videoId);
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Video not found' })
     }
 
@@ -705,7 +728,10 @@ const downvoteComment = async (req, res, next) => {
 
     const video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Video not found' })
     }
 
@@ -800,7 +826,10 @@ const GiftComment = async (req, res, next) => {
 
     const video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({
         success: false,
         error: 'Video not found',
@@ -1104,7 +1133,10 @@ const GiftVideo = async (req, res, next) => {
 
     const video = await LongVideo.findById(videoId)
 
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({
         success: false,
         error: 'Video not found',
@@ -1366,7 +1398,10 @@ const reshareVideo = async (req, res, next) => {
     }
 
     const video = await LongVideo.findById(videoId)
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
     const existingReshare = await Reshare.findOne({
@@ -1469,7 +1504,11 @@ const saveVideo = async (req, res, next) => {
 
     if (videoType === 'long') {
       const video = await LongVideo.findById(videoId)
-      if (!video) {
+      if (
+        !video ||
+        (video.visibility === 'hidden' &&
+          video.hidden_reason === 'video_deleted')
+      ) {
         return res.status(404).json({ message: 'Long video not found' })
       }
 
@@ -1529,7 +1568,10 @@ const ReplyToComment = async (req, res, next) => {
 
   try {
     const video = await LongVideo.findById(videoId)
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
     const comment = await Comment.findById(commentId)
@@ -1590,7 +1632,10 @@ const UpvoteReply = async (req, res, next) => {
 
   try {
     const video = await LongVideo.findById(videoId)
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
 
@@ -1648,7 +1693,10 @@ const DownvoteReply = async (req, res, next) => {
 
   try {
     const video = await LongVideo.findById(videoId)
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ message: 'Video not found' })
     }
     const comment = await Comment.findById(commentId)
@@ -1772,7 +1820,10 @@ const deleteComment = async (req, res, next) => {
     }
 
     const video = await LongVideo.findById(videoId)
-    if (!video) {
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
       return res.status(404).json({ error: 'Video not found' })
     }
 
