@@ -107,6 +107,8 @@ const uploadVideo = async (req, res, next) => {
     console.log('📝 Video name:', name)
     console.log('🏠 Community ID:', communityId)
     console.log('🎭 Is standalone:', is_standalone)
+    console.log('💰 Amount received:', amount, 'Type:', typeof amount)
+    console.log('🎭 Type received:', type)
 
     if (!userId) {
       console.error(' User ID not found in request')
@@ -130,14 +132,17 @@ const uploadVideo = async (req, res, next) => {
         error: 'episodeNumber and seriesId required for non-standalone videos',
       })
     }
-    if ((type === 'Paid') & (!amount || amount <= 0)) {
-      console.error(
-        'Amount has to be included and should be greater than 0 for paid videos'
-      )
-      return res.status(400).json({
-        error:
-          'Amount has to be included and should be greater than 0 for paid videos',
-      })
+    if (type === 'Paid') {
+      const numericAmount = parseFloat(amount);
+      if (!amount || isNaN(numericAmount) || numericAmount <= 0) {
+        console.error(
+          'Amount validation failed - amount:', amount, 'parsed:', numericAmount
+        )
+        return res.status(400).json({
+          error:
+            'Amount has to be included and should be greater than 0 for paid videos',
+        })
+      }
     }
 
     // Check upload permission using the proper function
@@ -213,6 +218,7 @@ const uploadVideo = async (req, res, next) => {
       thumbnailUrl: thumbnailUploadResult.url,
       genre: genre || 'Action',
       type: type || 'Free',
+      amount: amount ? parseFloat(amount) : 0,
       series: seriesId || null,
       episode_number: episodeNumber || null,
       age_restriction:

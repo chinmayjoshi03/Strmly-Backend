@@ -534,6 +534,8 @@ const completeDraftUpload = async (req, res, next) => {
       // Create the actual video record
       console.log('📝 Draft data during video creation:', draft.draft_data)
       console.log('🎬 Series ID from draft:', draft.draft_data.series_id)
+      console.log('💰 Amount from draft:', draft.draft_data.amount)
+      console.log('🎭 Type from draft:', draft.draft_data.type)
       
       const longVideo = new LongVideo({
         name:
@@ -548,6 +550,7 @@ const completeDraftUpload = async (req, res, next) => {
         community: draft.draft_data.community_id || null,
         genre: draft.draft_data.genre || 'Action',
         type: draft.draft_data.type || 'Free',
+        amount: draft.draft_data.amount || 0,
         series: draft.draft_data.series_id || null,
         age_restriction: draft.draft_data.age_restriction || false,
         Videolanguage: draft.draft_data.language || 'English',
