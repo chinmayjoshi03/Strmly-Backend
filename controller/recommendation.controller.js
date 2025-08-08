@@ -8,7 +8,8 @@ const UserAccess = require('../models/UserAccess')
 const getPersonalizedVideoRecommendations = async (req, res, next) => {
   try {
     const userId = req.user.id.toString()
-    const { page = 1, batchSize = 5 } = req.query
+    const page = parseInt(req.query.page) || 1
+    const batchSize = parseInt(req.query.batchSize) || 5
 
     const user = await User.findById(userId).select(
       'interests viewed_videos following'
@@ -30,6 +31,7 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
         _id: { $nin: viewedVideoIds },
         visibility: { $ne: 'hidden' },
       })
+        .lean()
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo followers')
         .populate({
@@ -46,27 +48,34 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
 
       // Process each video with access check
       for (let i = 0; i < interestedVideos.length; i++) {
-        let video = interestedVideos[i].toObject() // Convert to plain object
-        
+        let video = interestedVideos[i] // Convert to plain object
+
         // Add following status
-        if (video.created_by && followingIds.includes(video.created_by._id.toString())) {
+        if (
+          video.created_by &&
+          followingIds.includes(video.created_by._id.toString())
+        ) {
           video.is_following_creator = true
         } else {
           video.is_following_creator = false
         }
-        
+
         if (video.community) {
           const isFollowing = video.community.followers.some(
             (followerId) => followerId.toString() === userId
           )
           video.is_following_community = isFollowing
         }
-        
+        /*         if (video.start_time && video.display_till_time) {
+          video.start_time = video.start_time
+          video.display_till_time = video.display_till_time
+        } */
+
         // Check access and add access field
         video = await checkAccess(video, userId)
         interestedVideos[i] = video
       }
-      
+
       recommendedVideos.push(...interestedVideos)
     }
 
@@ -90,6 +99,7 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
         _id: { $nin: viewedVideoIds },
         visibility: { $ne: 'hidden' },
       })
+        .lean()
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo followers')
         .populate({
@@ -106,27 +116,34 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
 
       // Process each random video with access check
       for (let i = 0; i < randomVideos.length; i++) {
-        let video = randomVideos[i].toObject() // Convert to plain object
-        
+        let video = randomVideos[i] // Convert to plain object
+
         // Add following status
-        if (video.created_by && followingIds.includes(video.created_by._id.toString())) {
+        if (
+          video.created_by &&
+          followingIds.includes(video.created_by._id.toString())
+        ) {
           video.is_following_creator = true
         } else {
           video.is_following_creator = false
         }
-        
+
         if (video.community) {
           const isFollowing = video.community.followers.some(
             (followerId) => followerId.toString() === userId
           )
           video.is_following_community = isFollowing
         }
-        
+        /*         if (video.start_time && video.display_till_time) {
+          video.start_time = video.start_time
+          video.display_till_time = video.display_till_time
+        } */
+
         // Check access and add access field
         video = await checkAccess(video, userId)
         randomVideos[i] = video
       }
-      
+
       recommendedVideos.push(...randomVideos)
     }
 
@@ -136,39 +153,44 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
       user: { $in: followingIds },
       long_video: { $ne: null }, // Filter out null long_video entries
     })
+      .lean()
       .sort({ createdAt: -1 })
       .skip(resharedVideoSkip)
       .limit(2)
       .populate('user', 'username profile_photo')
       .populate({
         path: 'long_video',
+        select: 'name description thumbnailUrl _id',
         populate: [
-          { path: 'created_by', select: 'username profile_photo' },
-          { path: 'community', select: 'name profile_photo followers' },
+          { path: 'created_by', select: 'username profile_photo _id' },
+          { path: 'community', select: 'name profile_photo followers _id' },
         ],
       })
 
     // Process reshared videos with access check
     for (let i = 0; i < resharedVideos.length; i++) {
       const reshare = resharedVideos[i]
-      
+
       if (reshare.long_video) {
-        let video = reshare.long_video.toObject() // Convert to plain object
-        
+        let video = reshare.long_video // Convert to plain object
+
         // Add following status
-        if (video.created_by && followingIds.includes(video.created_by._id.toString())) {
+        if (
+          video.created_by &&
+          followingIds.includes(video.created_by._id.toString())
+        ) {
           video.is_following_creator = true
         } else {
           video.is_following_creator = false
         }
-        
+
         if (video.community) {
           const isFollowing = video.community.followers.some(
             (followerId) => followerId.toString() === userId
           )
           video.is_following_community = isFollowing
         }
-        
+
         // Check access and add access field
         video = await checkAccess(video, userId)
         resharedVideos[i].long_video = video
@@ -206,24 +228,27 @@ const checkAccess = async (video, userId) => {
         isPlayable: true,
         freeRange: {
           start_time: video.start_time || 0,
-          display_till_time: video.display_till_time || 0
+          display_till_time: video.display_till_time || 0,
         },
         isPurchased: true,
-        accessType: 'free'
+        accessType: 'free',
       }
     } else if (video.type === 'Paid') {
       // Check if user has creator pass access
-      const hasCreatorPass = await checkCreatorPassAccess(userId, video.created_by._id.toString())
-      
+      const hasCreatorPass = await checkCreatorPassAccess(
+        userId,
+        video.created_by._id.toString()
+      )
+
       if (hasCreatorPass.hasAccess) {
         video.access = {
           isPlayable: true,
           freeRange: {
             start_time: video.start_time || 0,
-            display_till_time: video.display_till_time || 0
+            display_till_time: video.display_till_time || 0,
           },
           isPurchased: true,
-          accessType: 'creator_pass'
+          accessType: 'creator_pass',
         }
       } else {
         // Check if user has purchased the video
@@ -231,29 +256,29 @@ const checkAccess = async (video, userId) => {
           user_id: userId,
           content_id: video._id,
           content_type: 'video',
-          access_type: 'paid'
+          access_type: 'paid',
         })
-        
+
         if (hasPurchasedVideo) {
           video.access = {
             isPlayable: true,
             freeRange: {
               start_time: video.start_time || 0,
-              display_till_time: video.display_till_time || 0
+              display_till_time: video.display_till_time || 0,
             },
             isPurchased: true,
-            accessType: 'purchased'
+            accessType: 'purchased',
           }
         } else {
           video.access = {
             isPlayable: false,
             freeRange: {
               start_time: video.start_time || 0,
-              display_till_time: video.display_till_time || 0
+              display_till_time: video.display_till_time || 0,
             },
             isPurchased: false,
             accessType: 'limited',
-            price: video.amount || 0
+            price: video.amount || 0,
           }
         }
       }
@@ -263,13 +288,13 @@ const checkAccess = async (video, userId) => {
         isPlayable: false,
         freeRange: {
           start_time: video.start_time || 0,
-          display_till_time: video.display_till_time || 0
+          display_till_time: video.display_till_time || 0,
         },
         isPurchased: false,
-        accessType: 'unknown'
+        accessType: 'unknown',
       }
     }
-    
+
     return video
   } catch (error) {
     console.error('Error checking video access:', error)
@@ -278,15 +303,14 @@ const checkAccess = async (video, userId) => {
       isPlayable: false,
       freeRange: {
         start_time: video.start_time || 0,
-        display_till_time: video.display_till_time || 0
+        display_till_time: video.display_till_time || 0,
       },
       isPurchased: false,
-      accessType: 'error'
+      accessType: 'error',
     }
     return video
   }
 }
-
 
 const addUserInterest = async (req, res, next) => {
   try {
@@ -467,8 +491,6 @@ const shuffleArray = (array) => {
   }
   return shuffled
 }
-
-
 
 module.exports = {
   getPersonalizedVideoRecommendations,
