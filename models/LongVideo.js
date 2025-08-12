@@ -78,18 +78,7 @@ const longVideoSchema = new mongoose.Schema(
     genre: {
       type: String,
       required: true,
-      enum: [
-        'Action',
-        'Comedy',
-        'Drama',
-        'Horror',
-        'Sci-Fi',
-        'Romance',
-        'Documentary',
-        'Thriller',
-        'Fantasy',
-        'Animation',
-      ],
+      
     },
     type: {
       type: String,

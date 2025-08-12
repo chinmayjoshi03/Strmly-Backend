@@ -5,6 +5,7 @@ const {
   RenameCommunity,
   ChangeCommunityProfilePhoto,
   AddBioToCommunity,
+  UpdateCommunitySettings,
   getAllCommunities,
   getCommunityById,
   getUploadPermissionForCommunity,
@@ -49,6 +50,9 @@ router.post('/follow', authenticateToken, FollowCommunity)
 
 // API to add bio to a community
 router.put('/add-bio', authenticateToken, AddBioToCommunity)
+
+// API to update community settings (creator limit, fee, etc.)
+router.put('/update-settings', authenticateToken, UpdateCommunitySettings)
 
 // API to get all communities
 router.get('/all', authenticateToken, getAllCommunities)

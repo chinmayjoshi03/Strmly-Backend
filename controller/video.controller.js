@@ -300,6 +300,7 @@ const uploadVideo = async (req, res, next) => {
         description: savedVideo.description,
         genre: savedVideo.genre,
         type: savedVideo.type,
+        amount: savedVideo.amount,
         language: savedVideo.language,
         age_restriction: savedVideo.age_restriction,
         start_time: savedVideo.start_time,
@@ -580,6 +581,7 @@ const finaliseChunkUpload = async (req, res, next) => {
         description: savedVideo.description,
         genre: savedVideo.genre,
         type: savedVideo.type,
+        amount: savedVideo.amount,
         language: savedVideo.language,
         age_restriction: savedVideo.age_restriction,
         start_time: savedVideo.start_time,
@@ -682,6 +684,7 @@ const searchVideos = async (req, res, next) => {
     })
       .populate('created_by', 'username email')
       .populate('community', 'name')
+      .populate('comments', '_id content user createdAt')
       .skip(skip)
       .limit(parseInt(limit))
       .sort({ createdAt: -1 })
@@ -722,6 +725,7 @@ const getVideoById = async (req, res, next) => {
     let video = await LongVideo.findById(id)
       .populate('created_by', 'username email')
       .populate('community', 'name')
+      .populate('comments', '_id content user createdAt')
       .populate({
         path: 'series',
         populate: {
@@ -869,6 +873,7 @@ const getTrendingVideos = async (req, res, next) => {
         'series',
         'title description total_episodes bannerUrl posterUrl _id created_by episodes'
       )
+      .populate('comments', '_id content user createdAt')
       .sort({ views: -1, likes: -1, createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -931,6 +936,7 @@ const getVideosByGenre = async (req, res, next) => {
       .populate('created_by', 'username email')
       .populate('community', 'name')
       .populate('series', 'title')
+      .populate('comments', '_id content user createdAt')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -998,6 +1004,7 @@ const getRelatedVideos = async (req, res, next) => {
     })
       .populate('created_by', 'username email')
       .populate('community', 'name')
+      .populate('comments', '_id content user createdAt')
       .limit(10)
 
     res.status(200).json({

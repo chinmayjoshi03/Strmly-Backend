@@ -289,6 +289,92 @@ const AddBioToCommunity = async (req, res, next) => {
   }
 }
 
+const UpdateCommunitySettings = async (req, res, next) => {
+  const { communityId, creator_limit, community_fee_type, community_fee_amount, community_fee_description } = req.body
+  const userId = req.user.id
+
+  console.log('📝 Update community settings request:', {
+    communityId,
+    creator_limit,
+    community_fee_type,
+    community_fee_amount,
+    community_fee_description,
+    userId
+  })
+
+  if (!communityId) {
+    return res.status(400).json({ message: 'Community ID is required' })
+  }
+
+  try {
+    // Build update object with only provided fields
+    const updateFields = {}
+    
+    if (creator_limit !== undefined) {
+      const limit = parseInt(creator_limit)
+      if (isNaN(limit) || limit < 1 || limit > 1000) {
+        return res.status(400).json({ 
+          message: 'Creator limit must be a number between 1 and 1000' 
+        })
+      }
+      updateFields.creator_limit = limit
+    }
+
+    if (community_fee_type !== undefined) {
+      if (!['free', 'paid'].includes(community_fee_type)) {
+        return res.status(400).json({ 
+          message: 'Community fee type must be either "free" or "paid"' 
+        })
+      }
+      updateFields.community_fee_type = community_fee_type
+      
+      // If changing to free, reset fee amount and description
+      if (community_fee_type === 'free') {
+        updateFields.community_fee_amount = 0
+        updateFields.community_fee_description = ''
+      }
+    }
+
+    if (community_fee_amount !== undefined && updateFields.community_fee_type !== 'free') {
+      const amount = parseInt(community_fee_amount)
+      if (isNaN(amount) || amount < 0 || amount > 5000) {
+        return res.status(400).json({ 
+          message: 'Community fee amount must be a number between 0 and 5000' 
+        })
+      }
+      updateFields.community_fee_amount = amount
+    }
+
+    if (community_fee_description !== undefined) {
+      updateFields.community_fee_description = community_fee_description
+    }
+
+    console.log('📝 Update fields:', updateFields)
+
+    const updatedCommunity = await Community.findOneAndUpdate(
+      { _id: communityId, founder: userId },
+      updateFields,
+      { new: true }
+    )
+
+    if (!updatedCommunity) {
+      return res
+        .status(404)
+        .json({ message: 'Community not found or you are not the founder' })
+    }
+
+    console.log('✅ Community settings updated successfully')
+
+    res.status(200).json({
+      message: 'Community settings updated successfully',
+      community: updatedCommunity,
+    })
+  } catch (error) {
+    console.error('❌ Error updating community settings:', error)
+    handleError(error, req, res, next)
+  }
+}
+
 const checkCommunityUploadPermission = async (userId, communityId) => {
   const community = await Community.findById(communityId)
 
@@ -544,6 +630,10 @@ const getCommunityProfileDetails = async (req, res, next) => {
       name: community.name,
       bio: community.bio,
       profilePhoto: community.profile_photo,
+      creator_limit: community.creator_limit,
+      community_fee_type: community.community_fee_type,
+      community_fee_amount: community.community_fee_amount,
+      community_fee_description: community.community_fee_description,
       totalFollowers,
       totalCreators,
       totalVideos,
@@ -627,6 +717,7 @@ const getTrendingCommunityVideos = async (req, res, next) => {
     const longVideos = await LongVideo.find(query)
       .populate('created_by', 'username profile_photo')
       .populate('community', 'name profile_photo')
+      .populate('comments', '_id content user createdAt')
       .sort({ likes: -1, views: -1, createdAt: -1 })
       .skip(skip)
       .limit(limitNum)
@@ -701,6 +792,7 @@ const getTrendingVideosByCommunity = async (req, res, next) => {
     })
       .populate('created_by', 'username profile_photo')
       .populate('community', 'name profile_photo')
+      .populate('comments', '_id content user createdAt')
       .sort(sortObject)
       .skip(skip)
       .limit(limitNum)
@@ -970,6 +1062,7 @@ module.exports = {
   RenameCommunity,
   ChangeCommunityProfilePhoto,
   AddBioToCommunity,
+  UpdateCommunitySettings,
   checkCommunityUploadPermission,
   getUploadPermissionForCommunity,
   getTrendingCommunityVideos,

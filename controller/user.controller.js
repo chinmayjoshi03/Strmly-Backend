@@ -38,6 +38,7 @@ const GetUserFeed = async (req, res, next) => {
     })
       .populate('created_by', 'username profile_photo')
       .populate('community', 'name profile_photo _id followers')
+      .populate('comments', '_id content user createdAt')
       .populate(
         'series',
         'title description price genre episodes seasons total_episodes'
@@ -72,6 +73,7 @@ const GetUserFeed = async (req, res, next) => {
       })
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo followers _id')
+        .populate('comments', '_id content user createdAt')
         .sort({ views: -1, likes: -1 })
         .limit(3)
     }
@@ -169,8 +171,11 @@ const UpdateUserProfile = async (req, res, next) => {
       bio,
       date_of_birth,
       interests,
+      interest1,
+      interest2,
       uniqueId,
       content_interests,
+      gender,
     } = req.body
     const profilePhotoFile = req.file
 
@@ -180,6 +185,7 @@ const UpdateUserProfile = async (req, res, next) => {
     if (date_of_birth !== undefined) updateData.date_of_birth = date_of_birth
     if (uniqueId) updateData.uniqueId = uniqueId
     if (content_interests) updateData.content_interests = content_interests
+    if (gender) updateData.gender = gender
 
     // Parse interests from JSON string
     if (interests) {
@@ -193,6 +199,36 @@ const UpdateUserProfile = async (req, res, next) => {
         return res
           .status(400)
           .json({ message: 'Invalid interests format. Must be a JSON array.' })
+      }
+    }
+
+    // Parse interest1 (YouTube interests) from JSON string
+    if (interest1) {
+      try {
+        const parsedInterest1 = JSON.parse(interest1)
+        if (Array.isArray(parsedInterest1)) {
+          updateData.interest1 = parsedInterest1
+        }
+      } catch (error) {
+        console.error(error)
+        return res
+          .status(400)
+          .json({ message: 'Invalid interest1 format. Must be a JSON array.' })
+      }
+    }
+
+    // Parse interest2 (Netflix interests) from JSON string
+    if (interest2) {
+      try {
+        const parsedInterest2 = JSON.parse(interest2)
+        if (Array.isArray(parsedInterest2)) {
+          updateData.interest2 = parsedInterest2
+        }
+      } catch (error) {
+        console.error(error)
+        return res
+          .status(400)
+          .json({ message: 'Invalid interest2 format. Must be a JSON array.' })
       }
     }
 
@@ -428,6 +464,7 @@ const GetUserVideos = async (req, res, next) => {
       videos = await LongVideo.find({ created_by: userId })
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo')
+        .populate('comments', '_id content user createdAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))
@@ -456,9 +493,9 @@ const GetUserInteractions = async (req, res, next) => {
     if (type === 'all' || type === 'likes') {
       const user = await User.findById(userId).populate({
         path: 'liked_videos',
-        select: 'name thumbnailUrl creator views likes',
+        select: 'name thumbnailUrl created_by views likes',
         populate: {
-          path: 'creator',
+          path: 'created_by',
           select: 'username profile_photo',
         },
       })
@@ -469,15 +506,15 @@ const GetUserInteractions = async (req, res, next) => {
       const commentedVideos = await LongVideo.find({
         'comments.user': userId,
       })
-        .select('name thumbnailUrl creator comments')
-        .populate('creator', 'username profile_photo')
+        .select('name thumbnailUrl created_by comments')
+        .populate('created_by', 'username profile_photo')
 
       const userComments = commentedVideos.map((video) => ({
         video: {
           _id: video._id,
           name: video.name,
           thumbnailUrl: video.thumbnailUrl,
-          creator: video.creator,
+          creator: video.created_by,
         },
         comments: video.comments.filter(
           (comment) => comment.user.toString() === userId.toString()
@@ -502,7 +539,7 @@ const GetUserEarnings = async (req, res, next) => {
   try {
     const userId = req.user.id.toString()
 
-    const userVideos = await LongVideo.find({ creator: userId }).select(
+    const userVideos = await LongVideo.find({ created_by: userId }).select(
       'name views likes shares'
     )
 
@@ -555,7 +592,7 @@ const GetUserNotifications = async (req, res, next) => {
 
     const notifications = []
 
-    const userLongVideos = await LongVideo.find({ creator: userId })
+    const userLongVideos = await LongVideo.find({ created_by: userId })
       .populate('comments.user', 'username profile_photo')
       .populate('liked_by', 'username profile_photo')
       .select('_id name comments liked_by')
@@ -1067,6 +1104,7 @@ const GetUserVideosById = async (req, res, next) => {
       videos = await LongVideo.find({ created_by: userId })
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo')
+        .populate('comments', '_id content user createdAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))
@@ -1287,7 +1325,8 @@ const getUserHistory = async (req, res, next) => {
       _id: { $in: paginatedVideoIds },
     })
       .populate('created_by', 'username profile_photo')
-      .select('_id name thumbnailUrl description views likes createdAt')
+      .populate('comments', '_id content user createdAt')
+      .select('_id name thumbnailUrl description views likes createdAt comments')
 
     const orderedVideos = paginatedVideoIds
       .map((videoId) =>
@@ -1569,6 +1608,7 @@ const getUserDashboardAnalytics = async (req, res, next) => {
       const videos = await LongVideo.find({ created_by: userId })
         .populate('created_by', 'username profile_photo')
         .populate('community', 'name profile_photo')
+        .populate('comments', '_id content user createdAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -1622,9 +1662,9 @@ const getUserDashboardAnalytics = async (req, res, next) => {
       //video likes
       const user = await User.findById(userId).populate({
         path: 'liked_videos',
-        select: 'name thumbnailUrl creator views likes',
+        select: 'name thumbnailUrl created_by views likes',
         populate: {
-          path: 'creator',
+          path: 'created_by',
           select: 'username profile_photo',
         },
       })
@@ -1761,7 +1801,8 @@ const getUserDashboardAnalytics = async (req, res, next) => {
             _id: { $in: paginatedVideoIds },
           })
             .populate('created_by', 'username profile_photo')
-            .select('_id name thumbnailUrl description views likes createdAt')
+            .populate('comments', '_id content user createdAt')
+            .select('_id name thumbnailUrl description views likes createdAt comments')
 
           const orderedVideos = paginatedVideoIds
             .map((videoId) =>
