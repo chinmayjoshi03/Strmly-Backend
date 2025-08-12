@@ -1540,8 +1540,7 @@ const unfollowUser = async (req, res, next) => {
 
 const getUserHistory = async (req, res, next) => {
   try {
-    const userId = req.user.id.toString()
-    const { page = 1, limit = 10 } = req.query
+   
     const userId = req.user.id.toString()
     const page = parseInt(req.query.page) || 1
     const limit = parseInt(req.query.limit) || 10
@@ -1669,8 +1668,8 @@ const getUserHistory = async (req, res, next) => {
 
 const getUserLikedVideosInCommunity = async (req, res, next) => {
   try {
-    const userId = req.user.id.toString()
-    const { communityId, page = 1, limit = 10 } = req.query
+   
+   
 
     const userId = req.user.id.toString()
     const { communityId } = req.params
