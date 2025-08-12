@@ -72,6 +72,9 @@ router.get('/trending-videos', getTrendingCommunityVideos)
 
 router.get('/creators/:communityId', authenticateToken, getListOfCreators)
 
+// API to get community followers
+router.get('/followers/:communityId', authenticateToken, getCommunityFollowers)
+
 // API to change community founder
 router.post('/change-founder', authenticateToken, changeCommunityFounder)
 

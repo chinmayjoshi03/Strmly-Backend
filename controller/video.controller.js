@@ -880,6 +880,15 @@ const getTrendingVideos = async (req, res, next) => {
     const userReshares = await Reshare.find({ user: userId }).select(
       'long_video'
     )
+    // Filter out videos with null created_by references
+    videos = videos.filter(video => {
+      if (!video.created_by) {
+        console.warn('Filtering out video with null created_by:', video._id);
+        return false;
+      }
+      return true;
+    });
+
     videos = videos.map((video) => {
       video = video.toObject()
       const community = video.community

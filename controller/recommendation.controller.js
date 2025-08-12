@@ -140,7 +140,18 @@ const getPersonalizedVideoRecommendations = async (req, res, next) => {
           { path: 'community', select: 'name profile_photo followers' },
         ],
       })
+
+    // Filter out reshares with null long_video references
+    resharedVideos = resharedVideos.filter(reshare => {
+      if (!reshare.long_video) {
+        console.warn('Filtering out reshare with null long_video:', reshare._id);
+        return false;
+      }
+      return true;
+    });
+
     resharedVideos.forEach((reshare) => {
+
       if (
         reshare.long_video.created_by &&
         followingIds.includes(reshare.long_video.created_by._id.toString())
