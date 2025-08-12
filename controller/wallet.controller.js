@@ -64,7 +64,7 @@ const sanitizeString = (str, maxLength = 200) => {
 const getOrCreateWallet = async (req, res, next) => {
   try {
     const userId = req.user.id.toString()
-    const { walletType = 'user' } = req.body
+    const walletType = req.body?.walletType || 'user'
     const validation = validateObjectId(userId, 'User ID')
     if (!validation.isValid) {
       throw new Error(validation.error)
@@ -75,11 +75,11 @@ const getOrCreateWallet = async (req, res, next) => {
     if (!wallet) {
       wallet = new Wallet({
         user_id: userId,
-        balance: 100,
+        balance: 0,
         currency: 'INR',
         wallet_type: walletType,
         status: 'active',
-        total_loaded: 100,
+        total_loaded: 0,
       })
       await wallet.save()
     }
@@ -117,7 +117,7 @@ const createWalletLoadOrder = async (req, res, next) => {
       })
     }
 
-    const wallet = await Wallet.find({ user_id: userId })
+    const wallet = await Wallet.findOne({ user_id: userId })
     if (!wallet) {
       return res.status(404).json({
         error: 'Wallet not found',
@@ -274,7 +274,7 @@ const verifyWalletLoad = async (req, res, next) => {
       })
     }
 
-    const wallet = await Wallet.find({ user_id: userId })
+    const wallet = await Wallet.findOne({ user_id: userId })
     if (!wallet) {
       return res.status(404).json({
         success: false,
@@ -309,7 +309,7 @@ const verifyWalletLoad = async (req, res, next) => {
 
         wallet.balance = balanceAfter
         wallet.total_loaded += amount
-        wallet.loaded += amount
+
         wallet.last_transaction_at = new Date()
         await wallet.save({ session })
       })
@@ -398,23 +398,6 @@ const transferToCreatorForSeries = async (req, res, next) => {
         code: 'SERIES_NOT_PAID',
       })
     }
-    const seriesAmount = series.price
-    if (Number(seriesAmount) !== Number(amount)) {
-      // if user amount and series amount are not same
-      return res.status(400).json({
-        success: false,
-        error: 'Series price does not match the provided amount',
-        code: 'SERIES_PRICE_MISMATCH',
-      })
-    }
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Series price is not set or invalid',
-        code: 'INVALID_SERIES_PRICE',
-      })
-    }
 
     const amountValidation = validateAmount(amount, 1, 10000)
     if (!amountValidation.isValid) {
@@ -422,6 +405,15 @@ const transferToCreatorForSeries = async (req, res, next) => {
         success: false,
         error: amountValidation.error,
         code: 'INVALID_AMOUNT',
+      })
+    }
+    const seriesAmount = series.price
+    if (Number(seriesAmount) !== Number(amount)) {
+      // if user amount and series amount are not same
+      return res.status(400).json({
+        success: false,
+        error: 'Series price does not match the provided amount',
+        code: 'SERIES_PRICE_MISMATCH',
       })
     }
 
@@ -448,7 +440,7 @@ const transferToCreatorForSeries = async (req, res, next) => {
       })
     }
 
-    if (creatorId.toString() === buyerId) {
+    if (creatorId === buyerId) {
       return res.status(400).json({
         success: false,
         error: 'You cannot buy your own series',
@@ -456,7 +448,7 @@ const transferToCreatorForSeries = async (req, res, next) => {
       })
     }
 
-    const buyerWallet = await Wallet.find({ user_id: buyerId })
+    const buyerWallet = await Wallet.findOne({ user_id: buyerId })
     if (!buyerWallet) {
       return res.status(404).json({
         success: false,
@@ -464,7 +456,7 @@ const transferToCreatorForSeries = async (req, res, next) => {
         code: 'BUYER_WALLET_NOT _FOUND',
       })
     }
-    const creatorWallet = await Wallet.find({ user_id: creatorId })
+    const creatorWallet = await Wallet.findOne({ user_id: creatorId })
     if (!creatorWallet) {
       return res.status(404).json({
         success: false,
@@ -555,6 +547,7 @@ const transferToCreatorForSeries = async (req, res, next) => {
           await buyerWallet.save({ session })
           series.locked_earnings += amount
           series.earned_till_date += amount
+          series.total_purchases++
           await series.save({ session })
           const buyerTransaction = new WalletTransaction({
             wallet_id: buyerWallet._id,
@@ -567,7 +560,7 @@ const transferToCreatorForSeries = async (req, res, next) => {
             balance_before: buyerBalanceBefore,
             balance_after: buyerBalanceAfter,
             content_id: seriesId,
-            content_type: 'series',
+            content_type: 'Series',
             status: 'completed',
             metadata: {
               series_title: series.title,
@@ -626,12 +619,12 @@ const transferToCreatorForSeries = async (req, res, next) => {
           },
         })
       } catch (transactionError) {
-        await session.abortTransaction()
+        if (session.inTransaction()) {
+          await session.abortTransaction()
+        }
         throw transactionError
       } finally {
-        if (session.inTransaction()) {
-          await session.endSession()
-        }
+        await session.endSession()
       }
     }
 
@@ -681,13 +674,14 @@ const transferToCreatorForSeries = async (req, res, next) => {
 
         creatorWallet.balance = creatorBalanceAfter
         creatorWallet.total_received += creatorAmount
-        creatorWallet.revenue += creatorAmount
+
         creatorWallet.last_transaction_at = new Date()
         await creatorWallet.save({ session })
         series.earned_till_date += amount
         if (lockedEarnings > 0) {
           series.locked_earnings = 0
         }
+        series.total_purchases++
         await series.save({ session })
         const buyerTransaction = new WalletTransaction({
           wallet_id: buyerWallet._id,
@@ -700,7 +694,7 @@ const transferToCreatorForSeries = async (req, res, next) => {
           balance_before: buyerBalanceBefore,
           balance_after: buyerBalanceAfter,
           content_id: seriesId,
-          content_type: 'series',
+          content_type: 'Series',
           status: 'completed',
           metadata: {
             series_title: series.title,
@@ -813,12 +807,12 @@ const transferToCreatorForSeries = async (req, res, next) => {
         },
       })
     } catch (transactionError) {
-      await session.abortTransaction()
+      if (session.inTransaction()) {
+        await session.abortTransaction()
+      }
       throw transactionError
     } finally {
-      if (session.inTransaction()) {
-        await session.endSession()
-      }
+      await session.endSession()
     }
   } catch (error) {
     handleError(error, req, res, next)
@@ -933,8 +927,16 @@ const transferCommunityFee = async (req, res, next) => {
       })
     }
 
+    if (amount !== community.community_fee_amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Amount does not match the community fee',
+        code: 'COMMUNITY_FEE_MISMATCH',
+      })
+    }
+
     // Get wallets
-    const creatorWallet = await Wallet.find({ user_id: creatorId })
+    const creatorWallet = await Wallet.findOne({ user_id: creatorId })
     if (!creatorWallet) {
       return res.status(404).json({
         success: false,
@@ -942,7 +944,7 @@ const transferCommunityFee = async (req, res, next) => {
         code: 'CREATOR_WALLET_NOT _FOUND',
       })
     }
-    const founderWallet = await Wallet.find({ user_id: founderId })
+    const founderWallet = await Wallet.findOne({ user_id: founderId })
     if (!founderWallet) {
       return res.status(404).json({
         success: false,
@@ -1043,7 +1045,7 @@ const transferCommunityFee = async (req, res, next) => {
         // Update founder wallet
         founderWallet.balance = founderBalanceAfter
         founderWallet.total_received += founderAmount
-        founderWallet.revenue += founderAmount
+
         founderWallet.last_transaction_at = new Date()
         await founderWallet.save({ session })
 
@@ -1192,13 +1194,11 @@ const transferCommunityFee = async (req, res, next) => {
             'Your subscription will need to be renewed after 30 days',
         },
       })
+      // eslint-disable-next-line no-useless-catch
     } catch (transactionError) {
-      await session.abortTransaction()
       throw transactionError
     } finally {
-      if (session.inTransaction()) {
-        await session.endSession()
-      }
+      await session.endSession()
     }
   } catch (error) {
     handleError(error, req, res, next)

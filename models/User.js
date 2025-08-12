@@ -16,6 +16,12 @@ const userSchema = new mongoose.Schema(
       minlength: 2,
       maxlength: 20,
     },
+    custom_name:{
+      type: String,
+      trim: true,
+      minlength: 2,
+      maxlength: 50,
+    },
     email: {
       type: String,
       required: true,
@@ -52,13 +58,13 @@ const userSchema = new mongoose.Schema(
       default: [],
     },
     community: {
-      //user joined communities
+      //all communities
       type: [mongoose.Schema.Types.ObjectId],
       ref: 'Community',
       default: [],
     },
     following_communities: {
-      //user following communities
+      //user following/joined communities
       type: [mongoose.Schema.Types.ObjectId],
       ref: 'Community',
       default: [],
@@ -132,18 +138,18 @@ const userSchema = new mongoose.Schema(
     date_of_birth: {
       type: Date,
     },
-      interests: {
-        type: [String],
-        default: [],
-      },
-      interest1:{
-        type:[String],
-        default: [],
-      },
-      interest2:{
-        type:[String],
-        default: [],
-      },
+    interests: {
+      type: [String],
+      default: [],
+    },
+    interest1: {
+      type: [String],
+      default: [],
+    },
+    interest2: {
+      type: [String],
+      default: [],
+    },
     viewed_videos: {
       type: [mongoose.Schema.Types.ObjectId],
       ref: 'LongVideo',
@@ -170,7 +176,7 @@ const userSchema = new mongoose.Schema(
       default: [],
     },
     comment_monetization_enabled: { type: Boolean, default: false },
-    video_monetization_enabled: { type: Boolean, default: false },
+
     creator_profile: {
       bank_details: {
         account_number: String,
@@ -352,7 +358,54 @@ userSchema.methods.isDeactivated = function () {
 
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next()
-
+    const genres= [
+    // General Categories
+    'Action & Adventure',
+    'Animation & Anime',
+    'Beauty & Fashion',
+    'Biography & True Story',
+    'Business & Finance',
+    'Career & Development',
+    'Comedy',
+    'Commentary & Opinion',
+    'Crime & Mystery',
+    'DIY & Crafts',
+    'Documentary',
+    'Drama',
+    'Education',
+    'Entertainment',
+    'Family & Kids',
+    'Food & Cooking',
+    'Gaming',
+    'Health & Fitness',
+    'Historical',
+    'Horror',
+    'Home & Lifestyle',
+    'International',
+    'Music',
+    'Motivation & Self-Improvement',
+    'News & Politics',
+    'Reality & Unscripted',
+    'Reviews & Unboxings',
+    'Romance',
+    'Science & Technology',
+    'Sci-Fi & Fantasy',
+    'Short Films',
+    'Spirituality & Philosophy',
+    'Sports',
+    'Talk Shows & Podcasts',
+    'Teen & Young Adult',
+    'Thriller & Suspense',
+    'Travel & Adventure',
+    'Vlog',
+    'Other'
+  ]
+  if(this.interest1 && !genres.includes(this.interest1)) {
+    return next(new Error('Invalid interest1 genre'))
+  }
+  if(this.interest2 && !genres.includes(this.interest2)) {
+    return next(new Error('Invalid interest2 genre'))
+  }
   try {
     const salt = await bcrypt.genSalt(10)
     this.password = await bcrypt.hash(this.password, salt)

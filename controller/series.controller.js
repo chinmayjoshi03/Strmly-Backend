@@ -1,6 +1,7 @@
 const Series = require('../models/Series')
 const LongVideo = require('../models/LongVideo')
 const { handleError } = require('../utils/utils')
+const { addDetailsToVideoObject } = require('../utils/utils')
 
 const createSeries = async (req, res, next) => {
   try {
@@ -88,18 +89,27 @@ const createSeries = async (req, res, next) => {
 const getSeriesById = async (req, res, next) => {
   try {
     const { id } = req.params
-
+    const userId = req.user.id.toString()
     const series = await Series.findById(id)
-      .populate('created_by', 'username email')
-      .populate('community', 'name')
+      .lean()
+      .populate('created_by', 'username email profile_photo custom_name')
+      .populate('community', 'name profile_photo followers')
       .populate({
         path: 'episodes',
-        select:
-          'name description thumbnailUrl season_number episode_number created_by videoUrl',
-        populate: {
-          path: 'created_by',
-          select: 'username email',
-        },
+        populate: [
+          {
+            path: 'created_by',
+            select: 'username profile_photo custom_name',
+          },
+          {
+            path: 'community',
+            select: 'name profile_photo followers',
+          },
+          {
+            path: 'liked_by',
+            select: 'username profile_photo',
+          },
+        ],
         options: {
           sort: { season_number: 1, episode_number: 1 },
         },
@@ -109,6 +119,9 @@ const getSeriesById = async (req, res, next) => {
       return res.status(404).json({ error: 'Series not found' })
     }
 
+    for (let i = 0; i < series.episodes.length; i++) {
+      await addDetailsToVideoObject(series.episodes[i], userId)
+    }
     res.status(200).json({
       message: 'Series retrieved successfully',
       data: series,

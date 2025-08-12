@@ -31,7 +31,10 @@ const {
   getUserReshares,
   getUserInterests,
   getMonetizationStatus,
-  toggleVideoMonetization,
+  getResharesOfOtherUser,
+  GetLikedVideosInProfileById,
+  HasCommunityAccess,
+  HasUserAccess,
 } = require('../controller/user.controller')
 const { createImageMulter, handleMulterError } = require('../utils/utils')
 
@@ -62,14 +65,7 @@ router.put(
   toggleCommentMonetization
 )
 
-//enable/disable video monetization
-router.put(
-  '/toggle-video-monetization',
-  authenticateToken,
-  toggleVideoMonetization
-)
-
-//get comment and video monetization status
+//get comment monetization status
 router.get('/monetization-status', authenticateToken, getMonetizationStatus)
 
 //send firebase FCM token for the user
@@ -79,6 +75,7 @@ router.post('/fcm_token', authenticateToken, saveUserFCMToken)
 router.get('/communities', authenticateToken, GetUserCommunities)
 
 // Get user videos
+router.get('/videos', authenticateToken, GetUserVideos)
 
 // Get user interactions
 router.get('/interactions', authenticateToken, GetUserInteractions)
@@ -120,7 +117,7 @@ router.post('/reshare/status', authenticateToken, GetStatusOfReshare)
 
 // Get user liked videos in a community
 router.get(
-  '/liked-videos-community',
+  '/liked-videos-community/:communityId',
   authenticateToken,
   getUserLikedVideosInCommunity
 )
@@ -130,8 +127,6 @@ router.put('/social-media-links', authenticateToken, updateSocialMediaLinks)
 
 // Add video to user view history
 router.post('/history', authenticateToken, AddVideoToUserViewHistory)
-
-router.get('/videos', authenticateToken, GetUserVideos)
 
 // Set creator pass price
 router.put('/creator-pass-price', authenticateToken, SetCreatorPassPrice)
@@ -149,10 +144,29 @@ router.get(
 // Get user profile by ID
 router.get('/profile/:id', authenticateToken, GetUserProfileById)
 
+// Get user's liked videos in a profile by ID
+router.get(
+  '/profile/:id/liked-videos',
+  authenticateToken,
+  GetLikedVideosInProfileById
+)
+
 // Get user videos by ID
 router.get('/videos/:id', authenticateToken, GetUserVideosById)
 
 // Check if user has creator pass for specific creator
 router.get('/has-creator-pass/:creatorId', authenticateToken, HasCreatorPass)
+
+// Check if user has community access using community-id
+router.get(
+  '/has-community-access/:communityId',
+  authenticateToken,
+  HasCommunityAccess
+)
+
+// Check if user has asset access using asset-id
+router.get('/has-user-access/:assetId', authenticateToken, HasUserAccess)
+
+router.get('/reshares/:id', authenticateToken, getResharesOfOtherUser)
 
 module.exports = router

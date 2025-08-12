@@ -348,7 +348,7 @@ const purchaseIndividualVideo = async (req, res, next) => {
       })
     }
 
-    if (amount < video.amount) {
+    if (amount !== video.amount) {
       return res.status(400).json({
         success: false,
         error: 'Amount not valid',
@@ -386,7 +386,7 @@ const purchaseIndividualVideo = async (req, res, next) => {
           currency: 'INR',
           transfer_type: 'video_purchase',
           content_id: id,
-          content_type: 'video',
+          content_type: 'LongVideo',
           description: `Purchased video: ${video.name}`,
           sender_balance_before: buyerWallet.balance,
           sender_balance_after: buyerWallet.balance - amount,
@@ -408,7 +408,7 @@ const purchaseIndividualVideo = async (req, res, next) => {
         buyerWallet.total_spent += amount
         creatorWallet.balance += amount
         creatorWallet.total_received += amount
-        creatorWallet.revenue += amount
+
         await buyerWallet.save({ session })
         await creatorWallet.save({ session })
 
@@ -438,7 +438,7 @@ const purchaseIndividualVideo = async (req, res, next) => {
           balance_before: buyerWallet.balance + amount,
           balance_after: buyerWallet.balance,
           content_id: id,
-          content_type: 'video',
+          content_type: 'LongVideo',
           status: 'completed',
         })
 
@@ -453,7 +453,7 @@ const purchaseIndividualVideo = async (req, res, next) => {
           balance_before: creatorWallet.balance - amount,
           balance_after: creatorWallet.balance,
           content_id: id,
-          content_type: 'video',
+          content_type: 'LongVideo',
           status: 'completed',
         })
 
@@ -486,8 +486,12 @@ const purchaseIndividualVideo = async (req, res, next) => {
         },
       })
     } catch (transactionError) {
-      await session.abortTransaction()
+      if (session.inTransaction()) {
+        await session.abortTransaction()
+      }
       throw transactionError
+    } finally {
+      await session.endSession()
     }
   } catch (error) {
     handleError(error, req, res, next)

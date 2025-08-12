@@ -7,14 +7,17 @@ const {
   uploadImageToS3,
   getFileFromS3Url,
 } = require('../utils/utils')
+const { addDetailsToVideoObject } = require('../utils/utils')
 const { checkCommunityUploadPermission } = require('./community.controller')
 const LongVideo = require('../models/LongVideo')
 const Reshare = require('../models/Reshare')
+const WalletTransaction = require('../models/WalletTransaction')
 const addVideoToQueue = require('../utils/video_fingerprint_queue')
 const path = require('path')
 const os = require('os')
 const videoCompressor = require('../utils/video_compressor')
 const { generateVideoABSSegments } = require('../utils/ABS')
+
 const fs = require('fs')
 
 const uploadVideoToCommunity = async (req, res, next) => {
@@ -181,6 +184,8 @@ const uploadVideo = async (req, res, next) => {
       outputPath,
       fileOriginalName,
       fileMimeType,
+      duration,
+      durationFormatted,
     } = await videoCompressor(videoFile)
 
     const videoUploadResult = await uploadVideoToS3(
@@ -221,6 +226,7 @@ const uploadVideo = async (req, res, next) => {
       amount: amount ? parseFloat(amount) : 0,
       series: seriesId || null,
       episode_number: episodeNumber || null,
+      amount: type === 'Paid' ? Number(amount) : 0,
       age_restriction:
         age_restriction === 'true' || age_restriction === true || false,
       Videolanguage: language || 'English',
@@ -228,7 +234,8 @@ const uploadVideo = async (req, res, next) => {
       display_till_time: display_till_time ? Number(display_till_time) : 0,
       subtitles: [],
       is_standalone: is_standalone === 'true',
-      is_monetized: user.video_monetization_enabled,
+      duration: duration || 0,
+      duration_formatted: durationFormatted || '00:00:00', // Add this
     }
     let savedVideo = new LongVideo(longVideo)
 
@@ -285,16 +292,15 @@ const uploadVideo = async (req, res, next) => {
     await addVideoToQueue(savedVideo._id, videoUploadResult.url)
     res.status(200).json({
       message: 'Video uploaded successfully',
-
       videoUrl: videoUploadResult.url,
       videoS3Key: videoUploadResult.key,
       thumbnailUrl: thumbnailUploadResult.url,
       thumbnailS3Key: thumbnailUploadResult.key,
       videoName: videoFile.originalname,
       fileSize: videoFile.size,
-
+      duration: duration || 0,
+      durationFormatted: durationFormatted || '00:00:00',
       videoId: savedVideo._id,
-
       videoData: {
         name: savedVideo.name,
         description: savedVideo.description,
@@ -305,6 +311,8 @@ const uploadVideo = async (req, res, next) => {
         age_restriction: savedVideo.age_restriction,
         start_time: savedVideo.start_time,
         display_till_time: savedVideo.display_till_time,
+        duration: savedVideo.duration || 0,
+        duration_formatted: savedVideo.duration_formatted || '00:00:00',
       },
       nextSteps: {
         message: 'Use videoId to add this video to a community',
@@ -457,11 +465,14 @@ const finaliseChunkUpload = async (req, res, next) => {
     }
 
     //compress video file
+
     const {
       compressedVideoBuffer,
       outputPath,
       fileOriginalName,
       fileMimeType,
+      duration,
+      durationFormatted,
     } = await videoCompressor(videoFile)
 
     //delete the fileId folder inside the uploads folder in tmp
@@ -511,6 +522,8 @@ const finaliseChunkUpload = async (req, res, next) => {
       display_till_time: display_till_time ? Number(display_till_time) : 0,
       subtitles: [],
       is_standalone: is_standalone === 'true',
+      duration: duration || 0,
+      duration_formatted: durationFormatted || '00:00:00',
     }
     let savedVideo = new LongVideo(longVideo)
 
@@ -566,16 +579,14 @@ const finaliseChunkUpload = async (req, res, next) => {
 
     res.status(200).json({
       message: 'Video uploaded successfully',
-
       videoUrl: videoUploadResult.url,
       videoS3Key: videoUploadResult.key,
       thumbnailUrl: thumbnailUploadResult.url,
       thumbnailS3Key: thumbnailUploadResult.key,
       videoName: videoFile.originalname,
       fileSize: videoFile.size,
-
+      duration: duration,
       videoId: savedVideo._id,
-
       videoData: {
         name: savedVideo.name,
         description: savedVideo.description,
@@ -586,6 +597,8 @@ const finaliseChunkUpload = async (req, res, next) => {
         age_restriction: savedVideo.age_restriction,
         start_time: savedVideo.start_time,
         display_till_time: savedVideo.display_till_time,
+        duration: savedVideo.duration,
+        duration_formatted: savedVideo.duration_formatted,
       },
       nextSteps: {
         message: 'Use videoId to add this video to a community',
@@ -721,19 +734,21 @@ const searchVideos = async (req, res, next) => {
 
 const getVideoById = async (req, res, next) => {
   try {
+    const userId = req.user.id.toString()
     const { id } = req.params
     let video = await LongVideo.findById(id)
-      .populate('created_by', 'username email')
-      .populate('community', 'name')
-      .populate('comments', '_id content user createdAt')
+      .lean()
+      .populate('created_by', 'username profile_photo')
+      .populate('community', 'name profile_photo followers')
       .populate({
         path: 'series',
+        select: 'title description price genre episodes seasons total_episodes',
         populate: {
-          path: 'episodes',
-          select: 'name episode_number season_number thumbnailUrl views likes',
-          options: { sort: { season_number: 1, episode_number: 1 } },
+          path: 'created_by',
+          select: 'username profile_photo',
         },
       })
+      .populate('liked_by', 'username profile_photo')
 
     if (
       !video ||
@@ -742,13 +757,11 @@ const getVideoById = async (req, res, next) => {
       return res.status(404).json({ error: 'Video not found' })
     }
 
+    await addDetailsToVideoObject(video, userId)
+
     res.status(200).json({
       message: 'Video retrieved successfully',
-      data: {
-        ...video.toObject(),
-        start_time: video.start_time,
-        display_till_time: video.display_till_time,
-      },
+      video,
     })
   } catch (error) {
     handleError(error, req, res, next)
@@ -864,58 +877,24 @@ const getTrendingVideos = async (req, res, next) => {
       return res.status(404).json({ message: 'User not found' })
     }
 
-    const followingIds = (user.following || []).map((id) => id.toString())
-
-    let videos = await LongVideo.find({})
-      .populate('created_by', 'username email profile_photo')
+    const videos = await LongVideo.find({})
+      .lean()
+      .populate('created_by', 'username email profile_photo custom_name')
       .populate('community', 'name profile_photo followers')
-      .populate(
-        'series',
-        'title description total_episodes bannerUrl posterUrl _id created_by episodes'
-      )
-      .populate('comments', '_id content user createdAt')
+      .populate({
+        path: 'series',
+        select: 'title description price genre episodes seasons total_episodes',
+        populate: {
+          path: 'created_by',
+          select: 'username profile_photo',
+        },
+      })
       .sort({ views: -1, likes: -1, createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-    const userReshares = await Reshare.find({ user: userId }).select(
-      'long_video'
-    )
-    // Filter out videos with null created_by references
-    videos = videos.filter(video => {
-      if (!video.created_by) {
-        console.warn('Filtering out video with null created_by:', video._id);
-        return false;
-      }
-      return true;
-    });
-
-    videos = videos.map((video) => {
-      video = video.toObject()
-      const community = video.community
-      if (community && community.followers) {
-        const isFollowing = community.followers.some(
-          (followerId) => followerId.toString() === userId
-        )
-        video.community = {
-          ...community,
-          is_following_community: isFollowing,
-        }
-      }
-      video.is_reshared = userReshares.some(
-        (reshare) => reshare.long_video.toString() === video._id.toString()
-      )
-      if (
-        video.created_by &&
-        followingIds.includes(video.created_by._id.toString())
-      ) {
-        video.is_following_creator = true
-      } else {
-        video.is_following_creator = false
-      }
-      video.start_time = video.start_time || 0
-      video.display_till_time = video.display_till_time || 0
-      return video
-    })
+    for (let i = 0; i < videos.length; i++) {
+      await addDetailsToVideoObject(videos[i], userId)
+    }
     let total = await LongVideo.countDocuments()
 
     res.status(200).json({
@@ -1025,6 +1004,62 @@ const getRelatedVideos = async (req, res, next) => {
   }
 }
 
+const getVideoGiftingInfo = async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    let video = await LongVideo.findById(id)
+      .select('visibility hidden_reason')
+      .lean()
+
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
+      return res.status(404).json({ error: 'Video not found' })
+    }
+
+    const giftingInfo = await WalletTransaction.find({
+      content_id: id,
+      transaction_category: 'video_gift',
+    })
+      .lean()
+      .select(
+        'user_id amount currency description balance_before balance_after'
+      )
+      .populate('user_id', 'username profile_photo')
+    res.status(200).json({
+      message: 'Gifting Info retrieved successfully',
+      data: giftingInfo,
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const getVideoTotalGifting = async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    let video = await LongVideo.findById(id)
+      .select('visibility hidden_reason gifts')
+      .lean()
+
+    if (
+      !video ||
+      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
+    ) {
+      return res.status(404).json({ error: 'Video not found' })
+    }
+    res.status(200).json({
+      message: 'Gifting Info retrieved successfully',
+      data: video.gifts,
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
 module.exports = {
   uploadVideo,
   searchVideos,
@@ -1040,4 +1075,6 @@ module.exports = {
   getVideoABSSegments,
   uploadVideoChunks,
   finaliseChunkUpload,
+  getVideoGiftingInfo,
+  getVideoTotalGifting,
 }

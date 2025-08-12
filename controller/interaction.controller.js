@@ -83,7 +83,7 @@ const statusOfLike = async (req, res, next) => {
       return res.status(404).json({ message: 'Video not found' })
     }
 
-    const isLiked = video.liked_by.includes(userId)
+    const isLiked = video.liked_by.some((user) => user.toString() === userId)
 
     res.status(200).json({
       message: 'Like status retrieved successfully',
@@ -111,16 +111,10 @@ const statusOfReshare = async (req, res, next) => {
       return res.status(404).json({ message: 'Video not found' })
     }
     const reshares = await Reshare.find({ user: userId })
-      .populate({
-        path: 'long_video',
-        select: 'name description _id',
-      })
-      .populate({
-        path: 'user',
-        select: 'username profile_photo _id',
-      })
+      .populate('long_video', 'name description thumbnailUrl')
+      .populate('user', 'username profile_photo')
     const isReshared = reshares.some(
-      (reshare) => reshare.long_video._id.toString() === videoId
+      (reshare) => reshare.long_video?._id.toString() === videoId
     )
     res.status(200).json({
       message: 'reshare status retrieved successfully',
@@ -216,27 +210,21 @@ const LikeVideo = async (req, res, next) => {
     }
 
     const hasLiked = video.liked_by.includes(userId)
-    const user = await User.findById(userId)
 
     if (hasLiked) {
       // Unlike the video
       const updatedVideo = await LongVideo.findOneAndUpdate(
         { _id: videoId },
-        [
-          {
-            $set: {
-              liked_by: { $setDifference: ['$liked_by', [userId]] },
-              likes: {
-                $cond: [
-                  { $gt: ['$likes', 0] },
-                  { $subtract: ['$likes', 1] },
-                  0,
-                ],
-              },
-            },
-          },
-        ],
+        {
+          $pull: { liked_by: userId },
+          $inc: { likes: -1 },
+        },
         { new: true }
+      )
+
+      await LongVideo.updateOne(
+        { _id: videoId, likes: { $lt: 0 } },
+        { $set: { likes: 0 } }
       )
 
       await User.updateOne(
@@ -395,7 +383,6 @@ const CommentOnVideo = async (req, res, next) => {
       user: userId,
       content: comment,
       long_video: videoId,
-      is_monetized: user.comment_monetization_enabled,
     })
 
     await newComment.save()
@@ -847,24 +834,14 @@ const GiftComment = async (req, res, next) => {
       })
     }
 
-    if (!comment.is_monetized) {
-      return res.status(404).json({
+    const isTopLevelComment = comment.parent_comment === null
+
+    if (!isTopLevelComment) {
+      return res.status(400).json({
         success: false,
-        error: 'Comment not monetized',
-        code: 'COMMENT_NOT_MONETIZED',
+        error: 'Cannot gift replies to comments, only original comments',
+        code: 'CANNOT_GIFT_REPLIES',
       })
-    }
-
-    if (comment.replies && comment.replies.length > 0) {
-      const isTopLevelComment = comment.parent_comment === null
-
-      if (!isTopLevelComment) {
-        return res.status(400).json({
-          success: false,
-          error: 'Cannot gift replies to comments, only original comments',
-          code: 'CANNOT_GIFT_REPLIES',
-        })
-      }
     }
 
     const commentAuthorId = comment.user
@@ -878,8 +855,29 @@ const GiftComment = async (req, res, next) => {
       })
     }
 
+    // Get user details
+    const receiver = await User.findById(commentAuthorId).select(
+      'username comment_monetization_enabled'
+    )
+
+    if (!receiver) {
+      return res.status(404).json({
+        success: false,
+        error: 'Comment author not found',
+        code: 'COMMENT_AUTHOR_NOT_FOUND',
+      })
+    }
+
+    if (!receiver.comment_monetization_enabled) {
+      return res.status(400).json({
+        success: false,
+        error: 'Comment author has disabled comment monetization',
+        code: 'COMMENT_MONETIZATION_DISABLED',
+      })
+    }
+
     // Get wallets
-    const gifterWallet = await Wallet.find({ user_id: gifterId })
+    const gifterWallet = await Wallet.findOne({ user_id: gifterId })
     if (!gifterWallet) {
       return res.status(400).json({
         success: false,
@@ -887,7 +885,7 @@ const GiftComment = async (req, res, next) => {
         code: 'GIFTER_WALLET_NOT_FOUND',
       })
     }
-    const receiverWallet = await Wallet.find({ user_id: commentAuthorId })
+    const receiverWallet = await Wallet.findOne({ user_id: commentAuthorId })
     if (!receiverWallet) {
       return res.status(400).json({
         success: false,
@@ -921,16 +919,6 @@ const GiftComment = async (req, res, next) => {
         success: false,
         error: "Receiver's wallet is not active",
         code: 'RECEIVER_WALLET_INACTIVE',
-      })
-    }
-
-    // Get user details
-    const receiver = await User.findById(commentAuthorId).select('username')
-    if (!receiver) {
-      return res.status(404).json({
-        success: false,
-        error: 'Comment author not found',
-        code: 'COMMENT_AUTHOR_NOT_FOUND',
       })
     }
 
@@ -985,6 +973,7 @@ const GiftComment = async (req, res, next) => {
 
         receiverWallet.balance = receiverBalanceAfter
         receiverWallet.total_received += amount
+
         receiverWallet.last_transaction_at = new Date()
         await receiverWallet.save({ session })
 
@@ -1143,16 +1132,16 @@ const GiftVideo = async (req, res, next) => {
         code: 'VIDEO_NOT_FOUND',
       })
     }
-
-    if (!video.is_monetized) {
+    const videoCreatorId = video.created_by.toString()
+    // Get user details
+    const receiver = await User.findById(videoCreatorId).select('username')
+    if (!receiver) {
       return res.status(404).json({
         success: false,
-        error: 'Video not monetized',
-        code: 'Video_NOT_MONETIZED',
+        error: 'Video creator not found',
+        code: 'VIDEO_VIDEO_NOT_FOUND',
       })
     }
-
-    const videoCreatorId = video.created_by.toString()
 
     // Check if user is trying to gift themselves
     if (videoCreatorId === gifterId) {
@@ -1164,7 +1153,7 @@ const GiftVideo = async (req, res, next) => {
     }
 
     // Get wallets
-    const gifterWallet = await Wallet.find({ user_id: gifterId })
+    const gifterWallet = await Wallet.findOne({ user_id: gifterId })
     if (!gifterWallet) {
       return res.status(400).json({
         success: false,
@@ -1172,7 +1161,7 @@ const GiftVideo = async (req, res, next) => {
         code: 'GIFTER_WALLET_NOT_FOUND',
       })
     }
-    const receiverWallet = await Wallet.find({ user_id: videoCreatorId })
+    const receiverWallet = await Wallet.findOne({ user_id: videoCreatorId })
     if (!receiverWallet) {
       return res.status(400).json({
         success: false,
@@ -1206,16 +1195,6 @@ const GiftVideo = async (req, res, next) => {
         success: false,
         error: "Receiver's wallet is not active",
         code: 'RECEIVER_WALLET_INACTIVE',
-      })
-    }
-
-    // Get user details
-    const receiver = await User.findById(videoCreatorId).select('username')
-    if (!receiver) {
-      return res.status(404).json({
-        success: false,
-        error: 'Video creator not found',
-        code: 'VIDEO_VIDEO_NOT_FOUND',
       })
     }
 
@@ -1268,7 +1247,7 @@ const GiftVideo = async (req, res, next) => {
 
         receiverWallet.balance = receiverBalanceAfter
         receiverWallet.total_received += amount
-        receiverWallet.revenue += amount
+
         receiverWallet.last_transaction_at = new Date()
         await receiverWallet.save({ session })
 
@@ -1353,7 +1332,7 @@ const GiftVideo = async (req, res, next) => {
           videoTitle: video.name,
 
           giftNote: 'video gift',
-          transferType: 'comment_gift',
+          transferType: 'video_gift',
         },
         gifter: {
           balanceBefore: gifterBalanceBefore,
@@ -1589,7 +1568,6 @@ const ReplyToComment = async (req, res, next) => {
       long_video: videoId,
       parent_comment: commentId,
       content: reply,
-      is_monetized: false, //no monetization on replies
     })
     comment.replies.push(newReply._id)
     await comment.save()
@@ -1808,7 +1786,7 @@ const deleteComment = async (req, res, next) => {
     if (!comment) {
       return res.status(404).json({ error: 'Comment not found' })
     }
-    if (comment.is_monetized) {
+    if (comment.gifts > 0) {
       return res
         .status(403)
         .json({ error: 'Monetized comment cannot be deleted', commentId })
