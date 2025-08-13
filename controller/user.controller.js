@@ -191,6 +191,8 @@ const UpdateUserProfile = async (req, res, next) => {
       bio,
       date_of_birth,
       interests,
+      interest1,
+      interest2,
       content_interests,
       custom_name,
       gender,
@@ -1600,7 +1602,7 @@ const getUserHistory = async (req, res, next) => {
     })
       .populate('created_by', 'username profile_photo')
       .populate('comments', '_id content user createdAt')
-      .select('_id name thumbnailUrl description views likes createdAt comments')
+      .select('_id name thumbnailUrl videoUrl description views likes createdAt comments duration genre type language age_restriction visibility gifts shares amount episode_number season_number start_time display_till_time')
       .lean()
       .populate('created_by', 'username profile_photo custom_name')
       .populate('community', 'name profile_photo followers')
@@ -1625,19 +1627,48 @@ const getUserHistory = async (req, res, next) => {
     for (let i = 0; i < orderedVideos.length; i++) {
       await addDetailsToVideoObject(orderedVideos[i], userId)
     }
-    // Format the response
+    // Format the response - include all fields needed for video player
     const formattedVideos = orderedVideos.map((video) => ({
       _id: video._id,
       name: video.name,
       thumbnailUrl: video.thumbnailUrl,
+      videoUrl: video.videoUrl, // Essential for video player
       description: video.description,
       views: video.views,
       likes: video.likes,
+      duration: video.duration,
+      genre: video.genre,
+      type: video.type,
+      language: video.language,
+      age_restriction: video.age_restriction,
+      visibility: video.visibility,
+      gifts: video.gifts || 0,
+      shares: video.shares || 0,
+      amount: video.amount || 0,
+      episode_number: video.episode_number,
+      season_number: video.season_number,
+      start_time: video.start_time || 0,
+      display_till_time: video.display_till_time || 0,
+      is_monetized: video.type === 'Paid' || video.amount > 0,
+      // Add access field for video player
+      access: {
+        isPlayable: true,
+        freeRange: { 
+          start_time: video.start_time || 0, 
+          display_till_time: video.display_till_time || 0 
+        },
+        isPurchased: true, // User has viewed it, so they have access
+        accessType: video.type === 'Paid' ? 'paid' : 'free',
+        price: video.amount || 0
+      },
       created_by: {
         _id: video.created_by._id,
         username: video.created_by.username,
         profile_photo: video.created_by.profile_photo,
       },
+      community: video.community,
+      series: video.series,
+      comments: video.comments,
       createdAt: video.createdAt,
     }))
 
@@ -2112,7 +2143,7 @@ const getUserDashboardAnalytics = async (req, res, next) => {
           })
             .populate('created_by', 'username profile_photo')
             .populate('comments', '_id content user createdAt')
-            .select('_id name thumbnailUrl description views likes createdAt comments')
+            .select('_id name thumbnailUrl videoUrl description views likes createdAt comments duration genre type language age_restriction visibility gifts shares amount episode_number season_number start_time display_till_time')
 
           const orderedVideos = paginatedVideoIds
             .map((videoId) =>
@@ -2122,14 +2153,40 @@ const getUserDashboardAnalytics = async (req, res, next) => {
             )
             .filter(Boolean) // Remove any null/undefined entries
 
-          // Format the response
+          // Format the response - include all fields needed for video player
           const formattedVideos = orderedVideos.map((video) => ({
             _id: video._id,
             name: video.name,
             thumbnailUrl: video.thumbnailUrl,
+            videoUrl: video.videoUrl, // Essential for video player
             description: video.description,
             views: video.views,
             likes: video.likes,
+            duration: video.duration,
+            genre: video.genre,
+            type: video.type,
+            language: video.language,
+            age_restriction: video.age_restriction,
+            visibility: video.visibility,
+            gifts: video.gifts || 0,
+            shares: video.shares || 0,
+            amount: video.amount || 0,
+            episode_number: video.episode_number,
+            season_number: video.season_number,
+            start_time: video.start_time || 0,
+            display_till_time: video.display_till_time || 0,
+            is_monetized: video.type === 'Paid' || video.amount > 0,
+            // Add access field for video player
+            access: {
+              isPlayable: true,
+              freeRange: { 
+                start_time: video.start_time || 0, 
+                display_till_time: video.display_till_time || 0 
+              },
+              isPurchased: true, // User has viewed it, so they have access
+              accessType: video.type === 'Paid' ? 'paid' : 'free',
+              price: video.amount || 0
+            },
             created_by: {
               _id: video.created_by._id,
               username: video.created_by.username,
