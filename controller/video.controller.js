@@ -781,17 +781,35 @@ const getTrendingVideos = async (req, res, next) => {
       .populate('community', 'name profile_photo followers')
       .populate({
         path: 'series',
-        select: 'title description price genre episodes seasons total_episodes',
-        populate: {
-          path: 'created_by',
-          select: 'username profile_photo',
-        },
+        populate: [
+          {
+            path: 'episodes',
+            select:
+              'name episode_number season_number thumbnailUrl views likes',
+            options: { sort: { season_number: 1, episode_number: 1 } },
+          },
+          {
+            path: 'created_by',
+            select: 'username profile_photo',
+          },
+        ],
       })
       .sort({ views: -1, likes: -1, createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
     for (let i = 0; i < videos.length; i++) {
       await addDetailsToVideoObject(videos[i], userId)
+      const creatorPassDetails = await User.findById(
+        videos[i].created_by._id?.toString()
+      )
+        .lean()
+        .select(
+          'creator_profile.creator_pass_price creator_profile.total_earned creator_profile.bank_verified creator_profile.verification_status creator_profile.creator_pass_deletion.deletion_requested creator_profile.bank_details.account_type'
+        )
+
+      if (creatorPassDetails && Object.keys(creatorPassDetails).length > 0) {
+        videos[i].creatorPassDetails = creatorPassDetails
+      }
     }
     let total = await LongVideo.countDocuments()
 
