@@ -10,9 +10,9 @@ const {
 const { addDetailsToVideoObject } = require('../utils/utils')
 const { checkCommunityUploadPermission } = require('./community.controller')
 const LongVideo = require('../models/LongVideo')
+const addVideoToStream = require('../utils/video_queue')
 const Reshare = require('../models/Reshare')
 const WalletTransaction = require('../models/WalletTransaction')
-const addVideoToQueue = require('../utils/video_fingerprint_queue')
 const path = require('path')
 const os = require('os')
 const videoCompressor = require('../utils/video_compressor')
@@ -241,6 +241,28 @@ const uploadVideo = async (req, res, next) => {
 
     await savedVideo.save()
 
+    await Community.findByIdAndUpdate(communityId, {
+      $push: { long_videos: savedVideo._id },
+      $addToSet: { creators: userId },
+    })
+    await addVideoToStream(
+      savedVideo._id.toString(),
+      videoUploadResult.key,
+      userId,
+      'nsfw_detection'
+    )
+    await addVideoToStream(
+      savedVideo._id.toString(),
+      videoUploadResult.key,
+      userId,
+      'video_fingerprint'
+    )
+    await addVideoToStream(
+      savedVideo._id.toString(),
+      videoUploadResult.key,
+      userId,
+      'audio_fingerprint'
+    )
     // Update community with new video
     if (communityId) {
       await Community.findByIdAndUpdate(communityId, {
@@ -883,17 +905,35 @@ const getTrendingVideos = async (req, res, next) => {
       .populate('community', 'name profile_photo followers')
       .populate({
         path: 'series',
-        select: 'title description price genre episodes seasons total_episodes',
-        populate: {
-          path: 'created_by',
-          select: 'username profile_photo',
-        },
+        populate: [
+          {
+            path: 'episodes',
+            select:
+              'name episode_number season_number thumbnailUrl views likes',
+            options: { sort: { season_number: 1, episode_number: 1 } },
+          },
+          {
+            path: 'created_by',
+            select: 'username profile_photo',
+          },
+        ],
       })
       .sort({ views: -1, likes: -1, createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
     for (let i = 0; i < videos.length; i++) {
       await addDetailsToVideoObject(videos[i], userId)
+      const creatorPassDetails = await User.findById(
+        videos[i].created_by._id?.toString()
+      )
+        .lean()
+        .select(
+          'creator_profile.creator_pass_price creator_profile.total_earned creator_profile.bank_verified creator_profile.verification_status creator_profile.creator_pass_deletion.deletion_requested creator_profile.bank_details.account_type'
+        )
+
+      if (creatorPassDetails && Object.keys(creatorPassDetails).length > 0) {
+        videos[i].creatorPassDetails = creatorPassDetails
+      }
     }
     let total = await LongVideo.countDocuments()
 

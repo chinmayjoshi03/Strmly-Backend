@@ -11,6 +11,11 @@ const {
   getReports,
   updateReportStatus,
   getTotalWalletLoad,
+  getWithdrawals,
+  processManualWithdrawal,
+  getTransactionById,
+  getUserTransactions,
+  getFinancialOverview,
 } = require('../controller/admin.controller')
 const { authenticateAdmin } = require('../middleware/adminAuth')
 
@@ -28,9 +33,13 @@ router.get('/payments', authenticateAdmin, getPayments)
 router.get('/creator-passes', authenticateAdmin, getCreatorPasses)
 router.get('/stats', authenticateAdmin, getStats)
 router.get('/wallet/load', authenticateAdmin, getTotalWalletLoad)
-
 router.get('/reports', authenticateAdmin, getReports)
 router.put('/report/:id', authenticateAdmin, updateReportStatus)
+router.get('/withdrawals', authenticateAdmin, getWithdrawals)
+router.post('/withdrawals/:id/process', authenticateAdmin, processManualWithdrawal)
+router.get('/transaction/:id',authenticateAdmin,getTransactionById)
+router.get('/user/transactions/:userId', authenticateAdmin, getUserTransactions)
+router.get('/financial-overview', authenticateAdmin, getFinancialOverview)
 
-module.exports = router
+
 module.exports = router

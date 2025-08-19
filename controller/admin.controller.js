@@ -8,6 +8,10 @@ const Series = require('../models/Series')
 const { handleError } = require('../utils/utils')
 const { generateAdminToken, ADMIN_CREDENTIALS } = require('../middleware/adminAuth')
 const path = require('path')
+const Withdrawal = require('../models/Withdrawal')
+const Wallet = require('../models/Wallet')
+const { sendEmail } = require('../utils/email')
+const WalletTransfer = require('../models/WalletTransfer')
 
 const adminLogin = async (req, res, next) => {
   try {
@@ -457,7 +461,6 @@ const getTotalWalletLoad=async(req,res,next)=>{
      transactions.forEach((transaction) => {
       sum += Number(transaction.amount)
     })
-    console.log('Total wallet load:', sum)
 
     res.status(200).json({
       success: true,
@@ -475,6 +478,645 @@ const getTotalWalletLoad=async(req,res,next)=>{
   }
 }
 
+const getWithdrawals = async (req, res, next) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 50, 
+      status = 'all', 
+      manual = 'all',
+      search = '' 
+    } = req.query
+    
+    const skip = (page - 1) * limit
+
+    let query = {}
+    
+    // Filter by status
+    if (status !== 'all') {
+      query.status = status
+    }
+    
+    // Filter by manual withdrawals
+    if (manual === 'true') {
+      query.internal_notes = { $regex: 'MANUAL_WITHDRAWAL', $options: 'i' }
+    } else if (manual === 'false') {
+      query.internal_notes = { $not: { $regex: 'MANUAL_WITHDRAWAL', $options: 'i' } }
+    }
+
+    // Search by creator username or reference ID
+    if (search) {
+      const users = await User.find({
+        username: { $regex: search, $options: 'i' }
+      }).select('_id')
+      
+      const userIds = users.map(user => user._id)
+      query = {
+        ...query,
+        $or: [
+          { creator_id: { $in: userIds } },
+          { reference_id: { $regex: search, $options: 'i' } }
+        ]
+      }
+    }
+
+    const withdrawals = await Withdrawal.find(query)
+      .populate('creator_id', 'username email creator_profile.bank_details creator_profile.upi_id')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+
+    const totalWithdrawals = await Withdrawal.countDocuments(query)
+
+    const withdrawalsWithDetails = withdrawals.map(withdrawal => ({
+      id: withdrawal._id,
+      referenceId: withdrawal.reference_id,
+      creator: {
+        id: withdrawal.creator_id._id,
+        username: withdrawal.creator_id.username,
+        email: withdrawal.creator_id.email,
+      },
+      amount: withdrawal.amount,
+      finalAmount: withdrawal.final_amount,
+      platformFee: withdrawal.platform_fee,
+      status: withdrawal.status,
+      manual: /MANUAL_WITHDRAWAL/i.test(withdrawal.internal_notes || ''),
+      payoutMethod: withdrawal.upi_id ? 'UPI' : 'Bank Account',
+      bankDetails: withdrawal.bank_details ? {
+        accountNumber: withdrawal.bank_details.account_number?.slice(-4),
+        ifscCode: withdrawal.bank_details.ifsc_code,
+        beneficiaryName: withdrawal.bank_details.beneficiary_name,
+      } : null,
+      upiId: withdrawal.upi_id,
+      requestedAt: withdrawal.requested_at,
+      processedAt: withdrawal.processed_at,
+      utr: withdrawal.utr,
+      failureReason: withdrawal.failure_reason,
+      notes: withdrawal.internal_notes,
+    }))
+
+    res.status(200).json({
+      success: true,
+      withdrawals: withdrawalsWithDetails,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: totalWithdrawals,
+        pages: Math.ceil(totalWithdrawals / limit)
+      }
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const processManualWithdrawal = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { action = 'process', utr, adminNotes } = req.body
+
+    if (!['process', 'fail'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Action must be 'process' or 'fail'"
+      })
+    }
+
+    const withdrawal = await Withdrawal.findById(id).populate('creator_id', 'username email')
+    if (!withdrawal) {
+      return res.status(404).json({
+        success: false,
+        message: 'Withdrawal not found'
+      })
+    }
+
+    // Check if it's a manual withdrawal
+    if (!/MANUAL_WITHDRAWAL/i.test(withdrawal.internal_notes || '')) {
+      return res.status(400).json({
+        success: false,
+        message: 'This is not a manual withdrawal request'
+      })
+    }
+
+    if (!['pending', 'processing'].includes(withdrawal.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Withdrawal is not in a processable state'
+      })
+    }
+
+    if (action === 'process') {
+      // Mark as processed
+      withdrawal.status = 'processed'
+      withdrawal.processed_at = new Date()
+      if (utr) withdrawal.utr = utr
+      
+      const updatedNotes = `${withdrawal.internal_notes}\n[ADMIN_PROCESSED] ${adminNotes || 'Manually processed by admin'}`.trim()
+      withdrawal.internal_notes = updatedNotes
+      
+      await withdrawal.save()
+
+      // Update related wallet transaction
+      await WalletTransaction.updateMany(
+        { 'metadata.withdrawal_id': withdrawal._id },
+        { status: 'processed' }
+      )
+
+      // Send success email to user
+      try {
+        await sendEmail(
+          withdrawal.creator_id.email,
+          'Withdrawal Processed Successfully',
+          `Hi ${withdrawal.creator_id.username},
+
+Your withdrawal request has been processed successfully!
+
+Reference ID: ${withdrawal.reference_id}
+Amount: ₹${withdrawal.final_amount}
+${utr ? `UTR/Transaction ID: ${utr}` : ''}
+
+The money has been transferred to your registered account.
+
+Regards,
+Strmly Team`
+        )
+      } catch (emailError) {
+        console.error('Email send failed:', emailError.message)
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Withdrawal marked as processed successfully',
+        withdrawal: {
+          id: withdrawal._id,
+          status: withdrawal.status,
+          processedAt: withdrawal.processed_at,
+          utr: withdrawal.utr,
+        }
+      })
+
+    } else if (action === 'fail') {
+      // Mark as failed and refund
+      withdrawal.status = 'failed'
+      withdrawal.failure_reason = adminNotes || 'Marked as failed by admin'
+      
+      const updatedNotes = `${withdrawal.internal_notes}\n[ADMIN_FAILED] ${adminNotes || 'Manually failed by admin'}`.trim()
+      withdrawal.internal_notes = updatedNotes
+      
+      await withdrawal.save()
+
+      // Refund the wallet
+      const wallet = await Wallet.findById(withdrawal.wallet_id)
+      if (wallet) {
+        const balanceBefore = wallet.balance
+        wallet.balance += withdrawal.amount
+        wallet.total_withdrawn -= withdrawal.amount
+        await wallet.save()
+
+        // Create refund transaction
+        const refundTransaction = new WalletTransaction({
+          wallet_id: wallet._id,
+          user_id: withdrawal.creator_id,
+          transaction_type: 'credit',
+          transaction_category: 'refund',
+          amount: withdrawal.amount,
+          currency: 'INR',
+          description: `Refund for failed withdrawal: ${withdrawal.reference_id}`,
+          balance_before: balanceBefore,
+          balance_after: wallet.balance,
+          status: 'completed',
+          metadata: {
+            withdrawal_id: withdrawal._id,
+            manual: true,
+            refund_reason: 'manual_withdrawal_failed',
+            admin_notes: adminNotes,
+          },
+        })
+
+        await refundTransaction.save()
+      }
+
+      // Update original wallet transaction
+      await WalletTransaction.updateMany(
+        { 'metadata.withdrawal_id': withdrawal._id },
+        { status: 'failed' }
+      )
+
+      // Send failure email to user
+      try {
+        await sendEmail(
+          withdrawal.creator_id.email,
+          'Withdrawal Request Failed - Amount Refunded',
+          `Hi ${withdrawal.creator_id.username},
+
+Unfortunately, your withdrawal request could not be processed and has been marked as failed.
+
+Reference ID: ${withdrawal.reference_id}
+Amount: ₹${withdrawal.amount}
+Reason: ${withdrawal.failure_reason}
+
+The full amount has been refunded back to your wallet and is available for use.
+
+If you have any questions, please contact our support team.
+
+Regards,
+Strmly Team`
+        )
+      } catch (emailError) {
+        console.error('Email send failed:', emailError.message)
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Withdrawal marked as failed and amount refunded to wallet',
+        withdrawal: {
+          id: withdrawal._id,
+          status: withdrawal.status,
+          failureReason: withdrawal.failure_reason,
+        }
+      })
+    }
+
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const getTransactionById=async(req,res,next)=>{
+  const { id } = req.params
+  try{
+    const transaction = await WalletTransaction.findById(id)
+      .populate('user_id', 'username email')
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found'
+      })
+    }
+    res.status(200).json({
+      success: true,
+      transaction
+    })
+  }
+  catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const getUserTransactions=async(req,res,next)=>{
+  const { userId } = req.params
+  const { page = 1, limit = 50 } = req.query
+  try {
+    const skip = (page - 1) * limit
+    const query = { user_id: userId }
+
+    const transactions = await WalletTransaction.find(query)
+      .populate('user_id', 'username email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+
+    const totalTransactions = await WalletTransaction.countDocuments(query)
+
+    res.status(200).json({
+      success: true,
+      transactions,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: totalTransactions,
+        pages: Math.ceil(totalTransactions / limit)
+      }
+    })
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+const getFinancialOverview = async (req, res, next) => {
+  try {
+    const { timeframe = 'all', startDate, endDate } = req.query
+    
+    // Build date filter
+    let dateFilter = {}
+    if (timeframe !== 'all') {
+      const now = new Date()
+      switch (timeframe) {
+        case '7d':
+          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+          dateFilter = { $gte: weekAgo, $lte: now }
+          break
+        case '30d':
+          const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+          dateFilter = { $gte: monthAgo, $lte: now }
+          break
+        case '90d':
+          const threeMonthsAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+          dateFilter = { $gte: threeMonthsAgo, $lte: now }
+          break
+        case '1y':
+          const yearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate())
+          dateFilter = { $gte: yearAgo, $lte: now }
+          break
+        case 'custom':
+          if (startDate && endDate) {
+            dateFilter = {
+              $gte: new Date(startDate),
+              $lte: new Date(endDate)
+            }
+          }
+          break
+      }
+    }
+
+    // Build queries with proper date filtering structure
+    const buildDateQuery = (baseQuery, dateField = 'createdAt') => {
+      if (Object.keys(dateFilter).length === 0) {
+        return baseQuery
+      }
+      return {
+        ...baseQuery,
+        [dateField]: dateFilter
+      }
+    }
+
+    // 1. Total Wallet Loads (Money added to platform)
+    const walletLoadsQuery = buildDateQuery({
+      transaction_category: 'wallet_load',
+      status: 'completed'
+    })
+
+    const walletLoads = await WalletTransaction.aggregate([
+      { $match: walletLoadsQuery },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$amount' },
+          totalCount: { $sum: 1 }
+        }
+      }
+    ])
+
+    // 2. Creator Gifting (Direct video/creator gifts)
+    const creatorGiftingQuery = buildDateQuery({
+      transfer_type: { $in: ['creator_gift', 'video_gift'] },
+      status: 'completed'
+    })
+
+    const creatorGifting = await WalletTransfer.aggregate([
+      { $match: creatorGiftingQuery },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$total_amount' },
+          creatorEarnings: { $sum: '$creator_amount' },
+          platformFees: { $sum: '$platform_amount' },
+          totalCount: { $sum: 1 }
+        }
+      }
+    ])
+
+    // 3. Comment Gifting
+    const commentGiftingQuery = buildDateQuery({
+      transfer_type: 'comment_gift',
+      status: 'completed'
+    })
+
+    const commentGifting = await WalletTransfer.aggregate([
+      { $match: commentGiftingQuery },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$total_amount' },
+          creatorEarnings: { $sum: '$creator_amount' },
+          platformFees: { $sum: '$platform_amount' },
+          totalCount: { $sum: 1 }
+        }
+      }
+    ])
+
+    // 4. Content Monetization (Series purchases)
+    const contentMonetizationQuery = buildDateQuery({
+      transfer_type: { $in: ['series_purchase', 'video_purchase'] },
+      status: 'completed'
+    })
+
+    const contentMonetization = await WalletTransfer.aggregate([
+      { $match: contentMonetizationQuery },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$total_amount' },
+          creatorEarnings: { $sum: '$creator_amount' },
+          platformFees: { $sum: '$platform_amount' },
+          totalCount: { $sum: 1 }
+        }
+      }
+    ])
+
+    // 5. Creator Pass Sales
+    const creatorPassQuery = buildDateQuery({
+      transfer_type: 'creator_pass',
+      status: 'completed'
+    })
+
+    const creatorPassSales = await WalletTransfer.aggregate([
+      { $match: creatorPassQuery },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$total_amount' },
+          creatorEarnings: { $sum: '$creator_amount' },
+          platformFees: { $sum: '$platform_amount' },
+          totalCount: { $sum: 1 }
+        }
+      }
+    ])
+
+    // 6. Community Fees
+    const communityFeesQuery = buildDateQuery({
+      transfer_type: 'community_fee',
+      status: 'completed'
+    })
+
+    const communityFees = await WalletTransfer.aggregate([
+      { $match: communityFeesQuery },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$total_amount' },
+          founderEarnings: { $sum: '$creator_amount' },
+          platformFees: { $sum: '$platform_amount' },
+          totalCount: { $sum: 1 }
+        }
+      }
+    ])
+
+    // 7. Pending Withdrawals
+    const pendingWithdrawalsQuery = buildDateQuery({
+      status: { $in: ['pending', 'queued'] }
+    }, 'requested_at')
+
+    const pendingWithdrawals = await Withdrawal.aggregate([
+      { $match: pendingWithdrawalsQuery },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$amount' },
+          finalAmount: { $sum: '$final_amount' },
+          platformFees: { $sum: '$platform_fee' },
+          totalCount: { $sum: 1 }
+        }
+      }
+    ])
+
+    // 8. Completed Withdrawals - Use processed_at for date filtering but check for null
+    let completedWithdrawalsQuery = {
+      status: { $in: ['processed', 'completed'] }
+    }
+
+    // For completed withdrawals, check both processed_at and requested_at
+    if (Object.keys(dateFilter).length > 0) {
+      completedWithdrawalsQuery = {
+        ...completedWithdrawalsQuery,
+        $or: [
+          { processed_at: dateFilter },
+          { 
+            processed_at: { $exists: false },
+            requested_at: dateFilter 
+          }
+        ]
+      }
+    }
+
+    const completedWithdrawals = await Withdrawal.aggregate([
+      { $match: completedWithdrawalsQuery },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$amount' },
+          finalAmount: { $sum: '$final_amount' },
+          platformFees: { $sum: '$platform_fee' },
+          totalCount: { $sum: 1 }
+        }
+      }
+    ])
+
+    // For debugging - let's also get all withdrawals to see what's happening
+    const allWithdrawalsForDebug = await Withdrawal.find({
+      status: { $in: ['processed', 'completed'] }
+    }).select('amount final_amount platform_fee status processed_at requested_at')
+
+
+    const pendingWithdrawalsData = pendingWithdrawals[0] || { totalAmount: 0, finalAmount: 0, platformFees: 0, totalCount: 0 }
+    const completedWithdrawalsData = completedWithdrawals[0] || { totalAmount: 0, finalAmount: 0, platformFees: 0, totalCount: 0 }
+
+    // Calculate totals and profit
+    const walletLoadsTotal = walletLoads[0]?.totalAmount || 0
+    const creatorGiftingTotal = creatorGifting[0]?.totalAmount || 0
+    const commentGiftingTotal = commentGifting[0]?.totalAmount || 0
+    const contentMonetizationTotal = contentMonetization[0]?.totalAmount || 0
+    const creatorPassTotal = creatorPassSales[0]?.totalAmount || 0
+    const communityFeesTotal = communityFees[0]?.totalAmount || 0
+    
+    // Money out should be the final amount (what actually left the platform)
+    const totalMoneyOut = completedWithdrawalsData.finalAmount
+    
+    // Total withdrawal requests (including platform fees)
+    const totalWithdrawalRequests = completedWithdrawalsData.totalAmount
+
+    // Platform profit calculation
+    const totalPlatformFees = 
+      (creatorGifting[0]?.platformFees || 0) +
+      (commentGifting[0]?.platformFees || 0) +
+      (contentMonetization[0]?.platformFees || 0) +
+      (creatorPassSales[0]?.platformFees || 0) +
+      (communityFees[0]?.platformFees || 0) +
+      completedWithdrawalsData.platformFees
+
+    const totalProfit = totalPlatformFees
+
+    // Total money flow
+    const totalMoneyIn = walletLoadsTotal
+    const netPlatformBalance = totalMoneyIn - totalMoneyOut
+
+    // Create structured financial data for frontend
+    const financialData = {
+      gifting: {
+        videoGifting: {
+          amount: creatorGiftingTotal,
+          count: creatorGifting[0]?.totalCount || 0
+        },
+        commentGifting: {
+          amount: commentGiftingTotal,
+          count: commentGifting[0]?.totalCount || 0
+        },
+        totalGifting: creatorGiftingTotal + commentGiftingTotal
+      },
+      monetization: {
+        contentSales: {
+          amount: contentMonetizationTotal,
+          count: contentMonetization[0]?.totalCount || 0
+        },
+        creatorPasses: {
+          amount: creatorPassTotal,
+          count: creatorPassSales[0]?.totalCount || 0
+        },
+        communityFees: {
+          amount: communityFeesTotal,
+          count: communityFees[0]?.totalCount || 0
+        },
+        totalMonetization: contentMonetizationTotal + creatorPassTotal + communityFeesTotal
+      },
+      withdrawals: {
+        pendingRequests: {
+          amount: pendingWithdrawalsData.totalAmount,
+          count: pendingWithdrawalsData.totalCount
+        },
+        completedWithdrawals: {
+          amount: completedWithdrawalsData.finalAmount, // Money actually sent to creators
+          totalRequested: completedWithdrawalsData.totalAmount, // Total withdrawal requests
+          platformFees: completedWithdrawalsData.platformFees, // Platform fees collected
+          count: completedWithdrawalsData.totalCount
+        }
+      },
+      walletActivity: {
+        totalLoaded: {
+          amount: walletLoadsTotal,
+          count: walletLoads[0]?.totalCount || 0
+        }
+      },
+      platformMetrics: {
+        totalRevenue: walletLoadsTotal,
+        withdrawalRate: totalMoneyIn > 0 ? ((totalMoneyOut / totalMoneyIn) * 100).toFixed(1) : '0.0',
+        netPlatformBalance: netPlatformBalance,
+        totalPlatformFees: totalPlatformFees,
+        totalWithdrawalRequests: totalWithdrawalRequests,
+        totalMoneyOut: totalMoneyOut,
+        avgTransactionValue: {
+          gifting: (creatorGiftingTotal + commentGiftingTotal) > 0 ? 
+            Math.round((creatorGiftingTotal + commentGiftingTotal) / ((creatorGifting[0]?.totalCount || 0) + (commentGifting[0]?.totalCount || 0))) : 0,
+          contentSales: contentMonetizationTotal > 0 ? 
+            Math.round(contentMonetizationTotal / (contentMonetization[0]?.totalCount || 1)) : 0,
+          creatorPasses: creatorPassTotal > 0 ? 
+            Math.round(creatorPassTotal / (creatorPassSales[0]?.totalCount || 1)) : 0
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Financial overview retrieved successfully',
+      financialData: financialData,
+      timeframe: timeframe
+    })
+
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
+
 module.exports = {
   adminLogin,
   getAdminDashboard,
@@ -487,5 +1129,9 @@ module.exports = {
   getReports,
   updateReportStatus,
   getTotalWalletLoad,
+  getWithdrawals,
+  processManualWithdrawal,
+  getTransactionById,
+  getUserTransactions,
+  getFinancialOverview, 
 }
-             

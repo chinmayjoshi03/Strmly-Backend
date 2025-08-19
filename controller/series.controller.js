@@ -1,8 +1,9 @@
 const Series = require('../models/Series')
+const Wallet = require('../models/Wallet')
 const LongVideo = require('../models/LongVideo')
 const { handleError } = require('../utils/utils')
 const { addDetailsToVideoObject } = require('../utils/utils')
-
+const mongoose = require('mongoose')
 const createSeries = async (req, res, next) => {
   try {
     const userId = req.user.id.toString()
@@ -22,30 +23,22 @@ const createSeries = async (req, res, next) => {
       promisedEpisodesCount,
     } = req.body
 
-    if (
-      !title ||
-      !description ||
-      !genre ||
-      !language ||
-      !type ||
-      !promisedEpisodesCount
-    ) {
+    if (!title || !description || !genre || !language || !type) {
       return res.status(400).json({
-        error:
-          'Required fields: title, description, genre, language, type, promisedEpisodesCount',
-      })
-    }
-    if (promisedEpisodesCount < 2) {
-      return res.status(400).json({
-        error:
-          'You must promise atleast 2 episodes to the viewers of your series',
+        error: 'Required fields: title, description, genre, language, type',
       })
     }
     // Validate price based on type
     if (type === 'Paid') {
-      if (!price || price <= 0) {
+      if (
+        !price ||
+        price <= 0 ||
+        !promisedEpisodesCount ||
+        promisedEpisodesCount < 2
+      ) {
         return res.status(400).json({
-          error: 'Paid series must have a price greater than 0',
+          error:
+            'Paid series must have a price greater than 0 and promised_episode_count of atleast 2',
         })
       }
       if (price > 10000) {
@@ -72,7 +65,7 @@ const createSeries = async (req, res, next) => {
       created_by: userId,
       updated_by: userId,
       community: communityId,
-      promised_episode_count: promisedEpisodesCount,
+      promised_episode_count: type === 'Paid' ? promisedEpisodesCount : 0,
     })
 
     await series.save()
@@ -234,16 +227,8 @@ const updateSeries = async (req, res, next) => {
   try {
     const { id } = req.params
     const userId = req.user.id.toString()
-    const {
-      title,
-      description,
-      posterUrl,
-      bannerUrl,
-      status,
-      seasons,
-      price,
-      type,
-    } = req.body
+    const { title, description, posterUrl, bannerUrl, status, seasons, type } =
+      req.body
 
     const series = await Series.findById(id)
     if (!series) {
@@ -266,28 +251,11 @@ const updateSeries = async (req, res, next) => {
       updated_by: userId,
     }
 
-    // Handle price and type updates
-    if (type !== undefined) {
+    // Handle type update
+    if (type && type === 'Free') {
       updateData.type = type
-      if (type === 'Paid') {
-        if (!price || price <= 0) {
-          return res.status(400).json({
-            error: 'Paid series must have a price greater than 0',
-          })
-        }
-        updateData.price = price
-      } else {
-        updateData.price = 0
-      }
-    } else if (price !== undefined) {
-      if (series.type === 'Paid') {
-        if (price <= 0) {
-          return res.status(400).json({
-            error: 'Paid series must have a price greater than 0',
-          })
-        }
-        updateData.price = price
-      }
+      updateData.price = 0
+      updateData.promised_episode_count = 0
     }
 
     const updatedSeries = await Series.findByIdAndUpdate(id, updateData, {
@@ -630,6 +598,93 @@ const getAllSeries = async (req, res, next) => {
   }
 }
 
+const unlockFunds = async (req, res, next) => {
+  try {
+    const userId = req.user.id.toString()
+    const { seriesId } = req.body
+    const series = await Series.findById(seriesId).select(
+      '_id locked_earnings promised_episode_count type visibility hidden_reason total_episodes'
+    )
+    const userWallet = await Wallet.findOne({ user_id: userId }).select(
+      '_id user_id balance total_received last_transaction_at status'
+    )
+
+    if (
+      !series ||
+      (series.visibility === 'hidden' &&
+        series.hidden_reason === 'series_deleted')
+    ) {
+      return res.status(404).json({ error: 'Series not found' })
+    }
+
+    if (!userWallet) {
+      return res.status(404).json({ error: 'user wallet not found' })
+    }
+
+    if (userWallet.status !== 'active') {
+      return res.status(403).json({ error: 'user wallet not active' })
+    }
+
+    if (series.locked_earnings === 0) {
+      return res.status(400).json({ error: 'no earnings left to unlock' })
+    }
+
+    if (
+      series.type === 'Paid' &&
+      series.total_episodes < series.promised_episode_count
+    ) {
+      return res
+        .status(403)
+        .json({ error: 'earnings not eligible for unlocking' })
+    }
+
+    const balanceBefore = userWallet.balance
+    const amount = series.locked_earnings
+    const balanceAfter = userWallet.balance + amount
+
+    const session = await mongoose.startSession()
+
+    try {
+      await session.withTransaction(async () => {
+        userWallet.balance = balanceAfter
+        userWallet.total_received += amount
+        userWallet.last_transaction_at = new Date()
+        await userWallet.save({ session })
+        series.locked_earnings = 0
+        await series.save({ session })
+      })
+
+      await session.endSession()
+
+      res.status(200).json({
+        success: true,
+        message: 'funds unlocked successfully!',
+        transaction: {
+          userId,
+          unlocked_funds: amount,
+          balanceBefore,
+          balanceAfter,
+          date: new Date(),
+        },
+        wallet: {
+          id: userWallet._id.toString(),
+          balance: userWallet.balance,
+          totalReceived: userWallet.total_received,
+        },
+      })
+    } catch (transactionError) {
+      await session.abortTransaction()
+      throw transactionError
+    } finally {
+      if (session.inTransaction()) {
+        await session.endSession()
+      }
+    }
+  } catch (error) {
+    handleError(error, req, res, next)
+  }
+}
+
 const recalculateSeriesAnalytics = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -682,5 +737,6 @@ module.exports = {
   removeEpisodeFromSeries,
   searchSeries,
   getAllSeries,
+  unlockFunds,
   recalculateSeriesAnalytics,
 }
