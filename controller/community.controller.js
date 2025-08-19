@@ -527,12 +527,18 @@ const getCommunityById = async (req, res, next) => {
 
 const getUserCommunities = async (req, res, next) => {
   try {
-    const userId = req.user.id
+    const userId = req.user.id.toString()
     const { type = 'all' } = req.query
 
     if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' })
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID is required',
+        code: 'MISSING_USER_ID'
+      })
     }
+
+
 
     let created = []
     let joined = []

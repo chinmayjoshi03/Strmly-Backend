@@ -1542,7 +1542,7 @@ const unfollowUser = async (req, res, next) => {
 
 const getUserHistory = async (req, res, next) => {
   try {
-   
+
     const userId = req.user.id.toString()
     const page = parseInt(req.query.page) || 1
     const limit = parseInt(req.query.limit) || 10
@@ -1653,9 +1653,9 @@ const getUserHistory = async (req, res, next) => {
       // Add access field for video player
       access: {
         isPlayable: true,
-        freeRange: { 
-          start_time: video.start_time || 0, 
-          display_till_time: video.display_till_time || 0 
+        freeRange: {
+          start_time: video.start_time || 0,
+          display_till_time: video.display_till_time || 0
         },
         isPurchased: true, // User has viewed it, so they have access
         accessType: video.type === 'Paid' ? 'paid' : 'free',
@@ -1699,8 +1699,8 @@ const getUserHistory = async (req, res, next) => {
 
 const getUserLikedVideosInCommunity = async (req, res, next) => {
   try {
-   
-   
+
+
 
     const userId = req.user.id.toString()
     const { communityId } = req.params
@@ -2179,9 +2179,9 @@ const getUserDashboardAnalytics = async (req, res, next) => {
             // Add access field for video player
             access: {
               isPlayable: true,
-              freeRange: { 
-                start_time: video.start_time || 0, 
-                display_till_time: video.display_till_time || 0 
+              freeRange: {
+                start_time: video.start_time || 0,
+                display_till_time: video.display_till_time || 0
               },
               isPurchased: true, // User has viewed it, so they have access
               accessType: video.type === 'Paid' ? 'paid' : 'free',

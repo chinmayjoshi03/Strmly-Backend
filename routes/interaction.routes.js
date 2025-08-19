@@ -4,6 +4,7 @@ const {
   ShareVideo,
   CommentOnVideo,
   GiftComment,
+  GiftVideo,
   getVideoComments,
   getCommentReplies,
   upvoteComment,
@@ -99,8 +100,8 @@ router.delete(
 // API to gift a comment
 router.post('/gift-comment', authenticateToken, paymentRateLimiter, GiftComment)
 
-// API to gift a video - DISABLED: GiftVideo function not implemented
-// router.post('/gift-video', authenticateToken, paymentRateLimiter, GiftVideo)
+// API to gift a video
+router.post('/gift-video', authenticateToken, paymentRateLimiter, GiftVideo)
 
 // API to reshare a video
 router.post('/reshare', authenticateToken, generalRateLimiter, reshareVideo)

@@ -58,7 +58,7 @@ router.put('/update-settings', authenticateToken, UpdateCommunitySettings)
 router.get('/all', authenticateToken, getAllCommunities)
 
 // API to get user communities
-router.get('/my-communities', authenticateToken, getUserCommunities)
+router.get('/user-communities', authenticateToken, getUserCommunities)
 
 // API to get upload permission for a community
 router.post(
