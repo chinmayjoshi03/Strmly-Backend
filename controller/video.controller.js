@@ -226,7 +226,6 @@ const uploadVideo = async (req, res, next) => {
       amount: amount ? parseFloat(amount) : 0,
       series: seriesId || null,
       episode_number: episodeNumber || null,
-      amount: type === 'Paid' ? Number(amount) : 0,
       age_restriction:
         age_restriction === 'true' || age_restriction === true || false,
       Videolanguage: language || 'English',
@@ -311,7 +310,6 @@ const uploadVideo = async (req, res, next) => {
       }
     }
 
-    await addVideoToQueue(savedVideo._id, videoUploadResult.url)
     res.status(200).json({
       message: 'Video uploaded successfully',
       videoUrl: videoUploadResult.url,

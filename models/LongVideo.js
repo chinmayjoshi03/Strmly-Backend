@@ -107,6 +107,7 @@ const longVideoSchema = new mongoose.Schema(
       required: true,
       enum: [
         'Action & Adventure',
+        'Action',
         'Animation & Anime',
         'Beauty & Fashion',
         'Biography & True Story',
