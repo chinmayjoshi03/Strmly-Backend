@@ -216,7 +216,7 @@ const FollowCommunity = async (req, res, next) => {
     )
 
     // Add user to creator join order if not already present
-    community.addCreatorToJoinOrder(userId)
+    // community.addCreatorToJoinOrder(userId)
     await community.save()
 
     res.status(200).json({
@@ -610,6 +610,59 @@ const getUserCommunities = async (req, res, next) => {
   }
 }
 
+const getFollowedCommunities = async (req, res, next) => {
+  try {
+    const userId = req.user.id.toString()
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID is required',
+        code: 'MISSING_USER_ID'
+      })
+    }
+
+    // Get user's followed communities from following_communities field
+    const user = await User.findById(userId).select('following_communities')
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+
+    let followedCommunities = []
+
+    if (user.following_communities && user.following_communities.length > 0) {
+      followedCommunities = await Community.find({ 
+        _id: { $in: user.following_communities }
+      })
+        .populate('founder', 'username profile_photo')
+        .populate('followers', 'username profile_photo')
+        .populate('creators', 'username profile_photo')
+        .populate('long_videos', 'name description videoUrl thumbnailUrl')
+        .populate('series', 'title description total_episodes')
+    }
+
+    // Add user relation info to each community
+    const communitiesWithRelation = followedCommunities.map(community => {
+      const communityObj = community.toObject()
+      communityObj.userRelation = community.founder.toString() === userId ? 'created' : 'followed'
+      communityObj.isFollowing = true
+      communityObj.isFounder = community.founder.toString() === userId
+      return communityObj
+    })
+
+    res.status(200).json({
+      communities: communitiesWithRelation,
+      count: communitiesWithRelation.length,
+      message: communitiesWithRelation.length > 0 
+        ? 'Followed communities fetched successfully' 
+        : 'No followed communities found',
+    })
+  } catch (error) {
+    console.error('❌ Error in getFollowedCommunities:', error)
+    handleError(error, req, res, next)
+  }
+}
 const getUploadPermissionForCommunity = async (req, res, next) => {
   try {
     const { communityId } = req.body
@@ -1183,4 +1236,5 @@ module.exports = {
   makeFirstJoinedCreatorFounder,
   handleFounderLeaving,
   getCommunityFollowingStatus,
+  getFollowedCommunities,
 }

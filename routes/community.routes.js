@@ -19,6 +19,7 @@ const {
   changeCommunityFounder,
   makeFirstJoinedCreatorFounder,
   getCommunityFollowingStatus,
+  getFollowedCommunities, // Add this import
 } = require('../controller/community.controller')
 
 const {
@@ -59,6 +60,8 @@ router.get('/all', authenticateToken, getAllCommunities)
 
 // API to get user communities
 router.get('/user-communities', authenticateToken, getUserCommunities)
+
+router.get('/followed', authenticateToken, getFollowedCommunities)
 
 // API to get upload permission for a community
 router.post(
