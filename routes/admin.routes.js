@@ -16,6 +16,13 @@ const {
   getTransactionById,
   getUserTransactions,
   getFinancialOverview,
+  getAutoNSFWViolations,
+  getAutoCopyrightViolations,
+  getContentModerationStats,
+  getViolationsByUser,
+  DeleteCopyVideo,
+  ignoreVideo,
+  getCommentGiftings,
 } = require('../controller/admin.controller')
 const { authenticateAdmin } = require('../middleware/adminAuth')
 
@@ -40,6 +47,17 @@ router.post('/withdrawals/:id/process', authenticateAdmin, processManualWithdraw
 router.get('/transaction/:id',authenticateAdmin,getTransactionById)
 router.get('/user/transactions/:userId', authenticateAdmin, getUserTransactions)
 router.get('/financial-overview', authenticateAdmin, getFinancialOverview)
+router.get('/comment-giftings', authenticateAdmin, getCommentGiftings)
 
+// Content moderation routes
+router.get('/auto-nsfw-violations', authenticateAdmin, getAutoNSFWViolations)
+router.get('/auto-copyright-violations', authenticateAdmin, getAutoCopyrightViolations)
+router.get('/content-moderation-stats', authenticateAdmin, getContentModerationStats)
+router.get('/user/:userId/violations', authenticateAdmin, getViolationsByUser)
+
+// delete video with auto copyright violation
+router.delete('/video/:videoId/:type', authenticateAdmin, DeleteCopyVideo)
+// ignore video
+router.post('/video/:videoId/ignore/:type',authenticateAdmin,ignoreVideo)
 
 module.exports = router

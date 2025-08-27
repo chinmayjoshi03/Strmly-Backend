@@ -83,8 +83,7 @@ const statusOfLike = async (req, res, next) => {
       return res.status(404).json({ message: 'Video not found' })
     }
 
-    const isLiked = video.liked_by.some((user) => user.toString() === userId)
-
+    const isLiked =video.liked_by.some(like => like.user && like.user.toString() === userId)
     res.status(200).json({
       message: 'Like status retrieved successfully',
       isLiked,
@@ -190,97 +189,82 @@ const statusOfUserFollower = async (req, res, next) => {
 }
 
 const LikeVideo = async (req, res, next) => {
-  const { videoId } = req.body
-  const userId = req.user.id.toString()
+  const { videoId } = req.body;
+  const userId = req.user.id;
 
   if (!videoId) {
-    return res
-      .status(400)
-      .json({ message: 'Video ID and video type are required' })
+    return res.status(400).json({ message: 'Video ID is required' });
   }
 
   try {
-    const video = await LongVideo.findById(videoId)
+    const video = await LongVideo.findById(videoId);
 
-    if (
-      !video ||
-      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
-    ) {
-      return res.status(404).json({ message: 'Video not found' })
+    if (!video || (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')) {
+      return res.status(404).json({ message: 'Video not found' });
     }
-
-    const hasLiked = video.liked_by.includes(userId)
+    const hasLiked = video.liked_by.some(like => like.user && like.user.toString() === userId.toString());
 
     if (hasLiked) {
-      // Unlike the video
-      const updatedVideo = await LongVideo.findOneAndUpdate(
-        { _id: videoId },
+      // Unlike - FIX: Add 'new' keyword before mongoose.Types.ObjectId
+      const updatedVideo = await LongVideo.findByIdAndUpdate(
+        videoId,
         {
-          $pull: { liked_by: userId },
-          $inc: { likes: -1 },
+          $pull: { liked_by: { user: new mongoose.Types.ObjectId(userId) } },
+          $inc: { likes: -1 }
         },
         { new: true }
-      )
+      );
 
-      await LongVideo.updateOne(
-        { _id: videoId, likes: { $lt: 0 } },
-        { $set: { likes: 0 } }
-      )
+      // Ensure likes don't go negative
+      if (updatedVideo.likes < 0) updatedVideo.likes = 0;
+      await updatedVideo.save();
 
-      await User.updateOne(
-        { _id: userId },
-        {
-          $pull: { liked_videos: videoId },
-        }
-      )
-      res.status(200).json({
+      await User.updateOne({ _id: userId }, { $pull: { liked_videos: videoId } });
+
+      return res.status(200).json({
         message: 'Video unliked successfully',
         likes: updatedVideo.likes,
-        isLiked: false,
-      })
+        isLiked: false
+      });
     } else {
-      // Like the video
-      const updatedVideo = await LongVideo.findOneAndUpdate(
-        { _id: videoId },
+      // Like
+      const updatedVideo = await LongVideo.findByIdAndUpdate(
+        videoId,
         {
-          $addToSet: { liked_by: userId },
-          $inc: { likes: 1 },
+          $push: { liked_by: { user: userId, likedAt: new Date() } },
+          $inc: { likes: 1 }
         },
         { new: true }
-      )
+      );
 
-      const updatedUser = await User.findOneAndUpdate(
-        { _id: userId },
-        {
-          $addToSet: { liked_videos: videoId },
-        },
+      const updatedUser = await User.findByIdAndUpdate(
+        userId,
+        { $addToSet: { liked_videos: videoId } },
         { new: true }
-      )
+      );
 
-      const videoCreator = updatedVideo.created_by.toString()
-      const videoName = updatedVideo.name
-      const userName = updatedUser.username
-      const userProfilePhoto = updatedUser.profile_photo
+      // Send notification
       await addVideoLikeNotificationToQueue(
-        videoCreator,
+        updatedVideo.created_by.toString(),
         userId,
         videoId,
-        userName,
-        videoName,
-        userProfilePhoto,
+        updatedUser.username,
+        updatedVideo.name,
+        updatedUser.profile_photo,
         updatedUser.FCM_token
-      )
+      );
 
-      res.status(200).json({
+      return res.status(200).json({
         message: 'Video liked successfully',
         likes: updatedVideo.likes,
-        isLiked: true,
-      })
+        isLiked: true
+      });
     }
   } catch (error) {
-    handleError(error, req, res, next)
+    handleError(error, req, res, next);
   }
-}
+};
+
 
 const ShareVideo = async (req, res, next) => {
   const { videoId } = req.body
@@ -454,100 +438,48 @@ const CommentOnVideo = async (req, res, next) => {
   }
 }
 
-const getVideoComments = async (req, res, next) => {
+
+const getVideoComments = async (req, res) => {
   try {
-    const userId = req.user.id.toString()
-    const { videoId } = req.params
-
-    if (!videoId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Video ID is required',
-        code: 'MISSING_VIDEO_ID',
-      })
-    }
-
-    const video = await LongVideo.findById(videoId)
-      .populate({
-        path: 'comments',
-        populate: {
-          path: 'user',
-          select: 'username profile_photo'
-        },
-        options: { sort: { createdAt: -1 } } // Sort comments by newest first
-      })
-      .populate('created_by', 'username profile_photo')
-
-    if (
-      !video ||
-      (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
-    ) {
-      return res.status(404).json({
-        success: false,
-        error: 'Video not found',
-        code: 'VIDEO_NOT_FOUND',
-      })
-    }
-
-    // Log comment structure for debugging
-    console.log(`📝 Found ${video.comments?.length || 0} comments for video ${videoId}`)
-
-    // Check for comments with missing users or content
-    const commentsWithoutUsers = video.comments?.filter(comment => !comment || !comment.user) || []
-    const commentsWithoutContent = video.comments?.filter(comment => comment && comment.user && !comment.content) || []
-
-    if (commentsWithoutUsers.length > 0) {
-      console.log(`⚠️ Found ${commentsWithoutUsers.length} comments with missing user data`)
-    }
-    if (commentsWithoutContent.length > 0) {
-      console.log(`⚠️ Found ${commentsWithoutContent.length} comments with missing content`)
-    }
-
-    const comments = video.comments
-      .filter(comment => comment && comment.user && comment.content) // Filter out comments without valid users or content
-      .map((comment) => {
-        // Debug comment content
-        console.log(`💬 Comment ${comment._id}: content="${comment.content}"`)
-
-        return {
-          _id: comment._id,
-          content: comment.content,
-          videoId: videoId,
-          replies: comment.replies ? comment.replies.length : 0,
-          timestamp: comment.createdAt,
-          donations: comment.donations || 0,
-          upvotes: comment.upvotes || 0,
-          downvotes: comment.downvotes || 0,
-          likes: comment.likes || 0,
-          user: {
-            id: comment.user._id,
-            name: comment.user.username || 'Anonymous User',
-            avatar: comment.user.profile_photo || 'https://api.dicebear.com/7.x/identicon/svg?seed=anonymous',
-          },
-          upvoted: comment.upvoted_by ? comment.upvoted_by.includes(userId) : false,
-          downvoted: comment.downvoted_by
-            ? comment.downvoted_by.includes(userId)
-            : false,
-          liked: comment.liked_by ? comment.liked_by.includes(userId) : false,
-          is_monetized: comment.is_monetized,
-        }
-      })
-
-    res.status(200).json({
-      message: 'Comments fetched successfully',
-      comments: comments,
-      pagination: {
-        page: parseInt(req.query.page) || 1,
-        limit: parseInt(req.query.limit) || 10,
-        total: comments.length,
-        totalPages: Math.ceil(comments.length / (parseInt(req.query.limit) || 10))
-      }
+    const { videoId } = req.params;
+    
+    const comments = await Comment.find({ 
+      long_video: videoId,
+      parent_comment: null 
     })
+    .populate('user', '_id username profile_photo')
+    .sort({ createdAt: -1 });
+    
+    const formattedComments = comments.map(comment => {
+      const user = comment.user;
+      
+      return {
+        _id: comment._id,
+        content: comment.content,
+        userId: user ? user._id : null,
+        username: user ? user.username : 'Unknown User',
+        profilePicture: user ? user.profile_photo : null, 
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        likes: comment.likes || 0,
+        upvotes: comment.upvotes || 0,
+        downvotes: comment.downvotes || 0,
+        gifts: comment.gifts || 0
+      };
+    });
+    
+    res.status(200).json({
+      success: true,
+      comments: formattedComments,
+      totalComments: formattedComments.length
+    });
   } catch (error) {
-    handleError(error, req, res, next)
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
-}
-
+};
 const getCommentReplies = async (req, res, next) => {
   try {
     const userId = req.user.id.toString()
@@ -1378,7 +1310,6 @@ const UpvoteReply = async (req, res, next) => {
         user.FCM_token
       )
     }
-
     res
       .status(200)
       .json({ message: 'Reply upvoted successfully', upvotes: reply.upvotes })

@@ -505,7 +505,7 @@ const addDetailsToVideoObject = async (videoObject, userId) => {
     'following following_communities'
   )
   const is_liked_video = videoObject.liked_by?.some(
-    (user) => user._id?.toString() === userId
+    (like) => like.user && like.user._id?.toString() === userId
   )
   videoObject.is_liked_video = is_liked_video
 
@@ -530,6 +530,26 @@ const addDetailsToVideoObject = async (videoObject, userId) => {
   })
   videoObject.is_reshared =
     reshare && Object.keys(reshare).length > 0 ? true : false
+
+  if (videoObject.videoResolutions) {
+    if (videoObject.videoResolutions.variants instanceof Map) {
+      videoObject.videoResolutions.variants = Object.fromEntries(videoObject.videoResolutions.variants);
+    }
+    
+    if (!videoObject.videoResolutions.variants || Object.keys(videoObject.videoResolutions.variants).length === 0) {
+      if (videoObject.videoResolutions.master && videoObject.videoResolutions.master.url) {
+        if (videoObject.videoResolutions.master.type === 'hls') {
+          videoObject.videoResolutions.variants = {
+            "auto": videoObject.videoResolutions.master.url
+          };
+        } else {
+          videoObject.videoResolutions.variants = {
+            "default": videoObject.videoResolutions.master.url
+          };
+        }
+      }
+    }
+  }
 }
 
 module.exports = {

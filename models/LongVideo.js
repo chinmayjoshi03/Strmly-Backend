@@ -59,22 +59,26 @@ const longVideoSchema = new mongoose.Schema(
       },
     },
     comments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Comment' }],
-    liked_by: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    liked_by: [
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    likedAt: { type: Date, default: Date.now }
+  }],
     videoUrl: {
       type: String,
       required: true,
       trim: true,
     },
     videoResolutions: {
-      type: Map,
-      of: new Schema(
-        {
-          url: { type: String, required: true },
-          key: { type: String, required: true },
-        },
-        { _id: false }
-      ),
-      default: {},
+      master: {
+        url: { type: String, default: '' },
+        type: { type: String, enum: ['mp4', 'hls'], default: 'mp4' }
+      },
+      variants: {
+        type: Map,
+        of: String,
+        default: new Map()
+      }
     },
     thumbnailUrl: {
       type: String,
@@ -250,3 +254,4 @@ longVideoSchema.pre('save', function (next) {
 const LongVideo = mongoose.model('LongVideo', longVideoSchema)
 
 module.exports = LongVideo
+

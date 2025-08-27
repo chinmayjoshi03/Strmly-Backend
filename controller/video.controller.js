@@ -19,6 +19,7 @@ const videoCompressor = require('../utils/video_compressor')
 const { generateVideoABSSegments } = require('../utils/ABS')
 
 const fs = require('fs')
+const Series = require('../models/Series')
 
 const uploadVideoToCommunity = async (req, res, next) => {
   try {
@@ -244,6 +245,43 @@ const uploadVideo = async (req, res, next) => {
       $push: { long_videos: savedVideo._id },
       $addToSet: { creators: userId },
     })
+    if (seriesId) {
+      try {
+        
+        // Get the series to check if it exists and get current episode count
+        const series = await Series.findById(seriesId)
+        if (series && series.created_by.toString() === userId.toString()) {
+          // Calculate next episode number
+          const nextEpisodeNumber = (series.total_episodes || 0) + 1
+          
+          // Update the video with episode information
+          await LongVideo.findByIdAndUpdate(savedVideo._id, {
+            episode_number: nextEpisodeNumber,
+            season_number: 1, // Default to season 1
+            is_standalone: false
+          })
+          
+          // Add video to series episodes and update analytics
+          await Series.findByIdAndUpdate(seriesId, {
+            $addToSet: { episodes: savedVideo._id },
+            $inc: {
+              total_episodes: 1,
+              'analytics.total_likes': savedVideo.likes || 0,
+              'analytics.total_views': savedVideo.views || 0,
+              'analytics.total_shares': savedVideo.shares || 0,
+            },
+            $set: { 'analytics.last_analytics_update': new Date() },
+          })
+          
+          console.log(`Video ${savedVideo._id} added to series ${seriesId} as episode ${nextEpisodeNumber}`)
+        } else {
+          console.error(` Series ${seriesId} not found or user ${userId} not authorized`)
+        }
+      } catch (seriesError) {
+        console.error(' Error adding video to series:', seriesError)
+      }
+    }
+    
     await addVideoToStream(
       savedVideo._id.toString(),
       videoUploadResult.key,
@@ -642,7 +680,6 @@ const createVideoABSSegments = async (req, res, next) => {
     }
 
     const video = await LongVideo.findById(videoId)
-
     if (
       !video ||
       (video.visibility === 'hidden' && video.hidden_reason === 'video_deleted')
@@ -653,15 +690,33 @@ const createVideoABSSegments = async (req, res, next) => {
     const videoFile = await getFileFromS3Url(videoUrl)
 
     const videoSegmentUrls = await generateVideoABSSegments(videoFile, videoId)
+    
+    // Format the videoResolutions properly with master playlist
+    const formattedResolutions = {
+      master: {
+        url: videoSegmentUrls.master?.url || videoUrl,
+        type: 'hls' // Indicate this is an HLS master playlist
+      },
+      variants: {}
+    }
+    
+    // Convert the segments object to the proper format (excluding master)
+    Object.entries(videoSegmentUrls).forEach(([resolution, data]) => {
+      if (resolution !== 'master') {
+        formattedResolutions.variants[resolution] = data.url;
+      }
+    });
+
     await LongVideo.findOneAndUpdate(
       { _id: videoId },
-      { $set: { videoResolutions: videoSegmentUrls } },
+      { $set: { videoResolutions: formattedResolutions } },
       { new: true }
     )
 
     res.status(200).json({
       message: 'Segments created successfully',
-      segments: videoSegmentUrls,
+      segments: formattedResolutions,
+      masterPlaylistUrl: formattedResolutions.master.url
     })
   } catch (error) {
     handleError(error, req, res, next)

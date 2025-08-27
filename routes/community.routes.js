@@ -19,7 +19,7 @@ const {
   changeCommunityFounder,
   makeFirstJoinedCreatorFounder,
   getCommunityFollowingStatus,
-  getFollowedCommunities, // Add this import
+  UpdateCommunitySettingsAccess,
 } = require('../controller/community.controller')
 
 const {
@@ -30,8 +30,10 @@ const {
 const { authenticateToken } = require('../middleware/auth')
 
 // API to create a community
-//accepts: FormData(name, bio, type, amount, fee_description, imageFile)
-router.post('/create', authenticateToken, communityProfilePhotoUpload, CreateCommunity)
+router.post('/create', authenticateToken,communityProfilePhotoUpload,CreateCommunity)
+
+router.post('/update-settings',authenticateToken, UpdateCommunitySettingsAccess)
+
 
 // API to rename a community
 router.put('/rename', authenticateToken, RenameCommunity)
