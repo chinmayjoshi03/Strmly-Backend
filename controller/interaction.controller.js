@@ -370,9 +370,14 @@ const CommentOnVideo = async (req, res, next) => {
     })
 
     await newComment.save()
+    
+    // FIX: Increment comments count on video and properly push comment ID
     video = await LongVideo.findOneAndUpdate(
       { _id: videoId },
-      { $push: { comments: newComment._id } },
+      { 
+        $push: { comments: newComment._id },
+        $inc: { comments_count: 1 } // Add this field to track comment count
+      },
       { new: true }
     )
 
@@ -390,6 +395,7 @@ const CommentOnVideo = async (req, res, next) => {
     }
 
     await user.save()
+    
     //add comment notification to queue:
     const videoCreator = video.created_by.toString()
     const videoName = video.name
@@ -405,39 +411,32 @@ const CommentOnVideo = async (req, res, next) => {
       videoName,
       userProfilePhoto,
       commentId,
-      commentText,
-      user.FCM_token
+      commentText
     )
-    // Get updated comment count
-    const updatedVideo = await LongVideo.findById(videoId).select('comments');
-
+    
+    // FIX: Return the new comment data and updated count
     res.status(200).json({
       message: 'Comment added successfully',
-      comments: updatedVideo.comments.length,
-      comment: {
+      comments: video.comments.length,
+      commentsCount: video.comments.length, // Consistent field name
+      newComment: {
         _id: newComment._id,
         content: newComment.content,
-        videoId: videoId,
-        replies: 0,
-        timestamp: newComment.createdAt,
-        donations: 0,
+        userId: user._id,
+        username: user.username,
+        profilePicture: user.profile_photo,
+        createdAt: newComment.createdAt,
         upvotes: 0,
         downvotes: 0,
-        user: {
-          id: user._id,
-          name: user.username,
-          avatar: user.profile_photo || 'https://api.dicebear.com/7.x/identicon/svg?seed=anonymous',
-        },
+        gifts: 0,
         upvoted: false,
-        downvoted: false,
-        is_monetized: newComment.is_monetized,
+        downvoted: false
       }
     })
   } catch (error) {
     handleError(error, req, res, next)
   }
 }
-
 
 const getVideoComments = async (req, res) => {
   try {
@@ -456,15 +455,30 @@ const getVideoComments = async (req, res) => {
       return {
         _id: comment._id,
         content: comment.content,
+        videoId: videoId,
         userId: user ? user._id : null,
         username: user ? user.username : 'Unknown User',
         profilePicture: user ? user.profile_photo : null, 
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt,
+        timestamp: comment.createdAt, // Add timestamp field for consistency
         likes: comment.likes || 0,
         upvotes: comment.upvotes || 0,
         downvotes: comment.downvotes || 0,
-        gifts: comment.gifts || 0
+        gifts: comment.gifts || 0,
+        donations: comment.gifts || 0, // Alias for gifts
+        replies: comment.replies ? comment.replies.length : 0,
+        repliesCount: comment.replies ? comment.replies.length : 0,
+        // Add user interaction flags
+        upvoted: comment.upvoted_by ? comment.upvoted_by.includes(req.user.id) : false,
+        downvoted: comment.downvoted_by ? comment.downvoted_by.includes(req.user.id) : false,
+        user: {
+          id: user ? user._id : null,
+          username: user ? user.username : 'Unknown User',
+          name: user ? user.username : 'Unknown User',
+          avatar: user ? user.profile_photo : null
+        },
+        is_monetized: true // Default to true
       };
     });
     
@@ -480,6 +494,7 @@ const getVideoComments = async (req, res) => {
     });
   }
 };
+
 const getCommentReplies = async (req, res, next) => {
   try {
     const userId = req.user.id.toString()
@@ -1198,6 +1213,7 @@ const checkForSaveVideo = async (req, res, next) => {
 const ReplyToComment = async (req, res, next) => {
   const { videoId, commentId, reply } = req.body
   const userId = req.user.id.toString()
+  
   if (!videoId || !commentId || !reply) {
     return res.status(400).json({
       message: 'Video ID, comment ID and reply are required',
@@ -1212,6 +1228,7 @@ const ReplyToComment = async (req, res, next) => {
     ) {
       return res.status(404).json({ message: 'Video not found' })
     }
+    
     const comment = await Comment.findById(commentId)
     if (!comment) {
       return res.status(404).json({ message: 'Comment not found' })
@@ -1228,14 +1245,21 @@ const ReplyToComment = async (req, res, next) => {
       parent_comment: commentId,
       content: reply,
     })
-    comment.replies.push(newReply._id)
-    await comment.save()
-
-    //send reply notification
-    const user = await User.findById(userId).select('username profile_photo')
-    const commentAuthor = await User.findById(comment.user.toString()).select(
-      'FCM_token'
+    
+    // FIX: Properly update the parent comment
+    await Comment.findByIdAndUpdate(
+      commentId,
+      { 
+        $push: { replies: newReply._id },
+        $inc: { reply_count: 1 } // Track reply count
+      },
+      { new: true }
     )
+
+    // Get user data for response
+    const user = await User.findById(userId).select('username profile_photo')
+    
+    //send reply notification
     await addCommentReplyNotificationToQueue(
       comment.user.toString(),
       userId,
@@ -1245,13 +1269,30 @@ const ReplyToComment = async (req, res, next) => {
       user.profile_photo,
       commentId,
       newReply._id.toString(),
-      reply,
-      commentAuthor.FCM_token
+      reply
     )
 
+    // FIX: Return the new reply data
     res.status(200).json({
       message: 'Reply added successfully',
-      repliesCount: comment.replies.length,
+      repliesCount: comment.replies.length + 1,
+      newReply: {
+        _id: newReply._id,
+        content: newReply.content,
+        parentId: commentId,
+        timestamp: newReply.createdAt,
+        gifts: 0,
+        upvotes: 0,
+        downvotes: 0,
+        user: {
+          id: user._id,
+          name: user.username,
+          username: user.username,
+          avatar: user.profile_photo || '',
+        },
+        upvoted: false,
+        downvoted: false,
+      }
     })
   } catch (error) {
     handleError(error, req, res, next)
