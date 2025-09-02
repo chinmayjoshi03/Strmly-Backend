@@ -128,12 +128,12 @@ const uploadVideo = async (req, res, next) => {
       return res.status(400).json({ error: 'is_standalone field required' })
     }
 
-    if (is_standalone === 'false' && (!episodeNumber || !seriesId)) {
+    if (is_standalone === 'false' && !seriesId) {
       console.error(
-        'episodeNumber and seriesId required for non-standalone videos'
+        'seriesId required for non-standalone videos'
       )
       return res.status(400).json({
-        error: 'episodeNumber and seriesId required for non-standalone videos',
+        error: 'seriesId required for non-standalone videos',
       })
     }
     if (type === 'Paid') {
@@ -241,42 +241,42 @@ const uploadVideo = async (req, res, next) => {
 
     await savedVideo.save()
 
-    if (seriesId) {
-      try {
+    // if (seriesId) {
+    //   try {
         
-        // Get the series to check if it exists and get current episode count
-        const series = await Series.findById(seriesId)
-        if (series && series.created_by.toString() === userId.toString()) {
-          // Calculate next episode number
-          const nextEpisodeNumber = (series.total_episodes || 0) + 1
+    //     // Get the series to check if it exists and get current episode count
+    //     const series = await Series.findById(seriesId)
+    //     if (series && series.created_by.toString() === userId.toString()) {
+    //       // Calculate next episode number
+    //       const nextEpisodeNumber = (series.total_episodes || 0) + 1
           
-          // Update the video with episode information
-          await LongVideo.findByIdAndUpdate(savedVideo._id, {
-            episode_number: nextEpisodeNumber,
-            season_number: 1, // Default to season 1
-            is_standalone: false
-          })
+    //       // Update the video with episode information
+    //       await LongVideo.findByIdAndUpdate(savedVideo._id, {
+    //         episode_number: nextEpisodeNumber,
+    //         season_number: 1, // Default to season 1
+    //         is_standalone: false
+    //       })
           
-          // Add video to series episodes and update analytics
-          await Series.findByIdAndUpdate(seriesId, {
-            $addToSet: { episodes: savedVideo._id },
-            $inc: {
-              total_episodes: 1,
-              'analytics.total_likes': savedVideo.likes || 0,
-              'analytics.total_views': savedVideo.views || 0,
-              'analytics.total_shares': savedVideo.shares || 0,
-            },
-            $set: { 'analytics.last_analytics_update': new Date() },
-          })
+    //       // Add video to series episodes and update analytics
+    //       await Series.findByIdAndUpdate(seriesId, {
+    //         $addToSet: { episodes: savedVideo._id },
+    //         $inc: {
+    //           total_episodes: 1,
+    //           'analytics.total_likes': savedVideo.likes || 0,
+    //           'analytics.total_views': savedVideo.views || 0,
+    //           'analytics.total_shares': savedVideo.shares || 0,
+    //         },
+    //         $set: { 'analytics.last_analytics_update': new Date() },
+    //       })
           
-          console.log(`Video ${savedVideo._id} added to series ${seriesId} as episode ${nextEpisodeNumber}`)
-        } else {
-          console.error(` Series ${seriesId} not found or user ${userId} not authorized`)
-        }
-      } catch (seriesError) {
-        console.error(' Error adding video to series:', seriesError)
-      }
-    }
+    //       console.log(`Video ${savedVideo._id} added to series ${seriesId} as episode ${nextEpisodeNumber}`)
+    //     } else {
+    //       console.error(` Series ${seriesId} not found or user ${userId} not authorized`)
+    //     }
+    //   } catch (seriesError) {
+    //     console.error(' Error adding video to series:', seriesError)
+    //   }
+    // }
     
     await addVideoToStream(
       savedVideo._id.toString(),
